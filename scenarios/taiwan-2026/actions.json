@@ -1,0 +1,172 @@
+{
+  "scriptedTurns": [
+    {
+      "turn": 1,
+      "narrative": "Move 1: 5th CSG operates in close proximity to PLAN, CCG and maritime militia vessels in the South China Sea while joint PLA exercises continue around Taiwan.",
+      "actions": {
+        "USA": [
+          {
+            "id": "usa-t1-roe",
+            "faction": "USA",
+            "summary": "Issue restrictive ROE: hold fire unless fired upon",
+            "details": "INDOPACOM directs CSG: hold fire unless fired upon; automated point defense on manual firing control (AI proposes target, human authorises trigger)."
+          },
+          {
+            "id": "usa-t1-signal",
+            "faction": "USA",
+            "summary": "Public reassurance + private deconfliction with Beijing",
+            "details": "State Department reiterates 'routine exercise'. US DoD opens deconfliction channel with PLA; messages restraint without retreating posture."
+          }
+        ],
+        "ROC": [
+          {
+            "id": "roc-t1-quiet",
+            "faction": "ROC",
+            "summary": "Public silence; quiet acceleration of US-advisor integration",
+            "details": "Taiwan government declines public comment; quietly accelerates integration of new US-supplied missiles and C3 systems."
+          }
+        ],
+        "PRC": [
+          {
+            "id": "prc-t1-pressure",
+            "faction": "PRC",
+            "summary": "Maintain shadowing pressure and information ops",
+            "details": "PLAN, CCG, maritime militia continue close shadowing of CSG. Domestic information operations frame US presence as aggression."
+          },
+          {
+            "id": "prc-t1-cyber",
+            "faction": "PRC",
+            "summary": "Limited cyber probe of Taiwan logistics networks",
+            "details": "Clandestine cyber operations probe ROC military logistics networks; nothing publicly disruptive yet."
+          }
+        ]
+      }
+    },
+    {
+      "turn": 2,
+      "narrative": "Move 2 trigger: an AI-enabled CSG defense system fires on a maritime militia vessel in close proximity, causing significant Chinese casualties. Allies are silent and waiting on the US response.",
+      "actions": {
+        "USA": [
+          {
+            "id": "usa-t2-statement",
+            "faction": "USA",
+            "summary": "Public statement of regret without admission of fault",
+            "details": "POTUS issues statement of regret for loss of life; notes ROE was defensive; offers consular access for casualty repatriation."
+          },
+          {
+            "id": "usa-t2-csg",
+            "faction": "USA",
+            "summary": "Hold CSG posture, raise alert level",
+            "details": "5th CSG holds station; alert level raised. 3rd CSG accelerates transit toward region."
+          },
+          {
+            "id": "usa-t2-allies",
+            "faction": "USA",
+            "summary": "Quiet diplomatic outreach to allies",
+            "details": "Bilateral calls with Japan, Australia, Philippines requesting public statements of solidarity."
+          }
+        ],
+        "ROC": [
+          {
+            "id": "roc-t2-readiness",
+            "faction": "ROC",
+            "summary": "Raise military alert; muted public statement",
+            "details": "ROC military quietly raises readiness; government issues short statement urging restraint by all parties."
+          }
+        ],
+        "PRC": [
+          {
+            "id": "prc-t2-condemn",
+            "faction": "PRC",
+            "summary": "Public condemnation, demand US accountability",
+            "details": "PRC publicly condemns 'US aggression'; demands accountability and reparations; mobilises domestic media to call for response."
+          },
+          {
+            "id": "prc-t2-econ",
+            "faction": "PRC",
+            "summary": "Targeted economic punishment on US firms",
+            "details": "Customs delays, regulatory action against named US firms operating in PRC."
+          },
+          {
+            "id": "prc-t2-mil",
+            "faction": "PRC",
+            "summary": "Forward-deploy DF-series launchers, increase ADIZ violations",
+            "details": "Strategic Rocket Force visibly forward-deploys DF-series launchers; PLAAF increases scale of ADIZ violations."
+          }
+        ]
+      }
+    },
+    {
+      "turn": 3,
+      "narrative": "Diplomatic and military pressure now compounding. Both sides under domestic pressure to escalate; allies finally beginning to speak.",
+      "actions": {
+        "USA": [
+          {
+            "id": "usa-t3-deconflict",
+            "faction": "USA",
+            "summary": "Propose direct leader-level deconfliction call",
+            "details": "Propose a POTUS-Xi call to defuse; offer to pause new arms shipments to Taiwan for 30 days as goodwill gesture if PRC stands down forward deployments."
+          },
+          {
+            "id": "usa-t3-allies",
+            "faction": "USA",
+            "summary": "Coordinate joint allied freedom-of-navigation operation",
+            "details": "Coordinate FONOP with Japan and Australia in South China Sea, signalling collective resolve."
+          }
+        ],
+        "ROC": [
+          {
+            "id": "roc-t3-mobilize",
+            "faction": "ROC",
+            "summary": "Partial reservist mobilisation and civil-defence drills",
+            "details": "Quiet activation of selected reservist units; nationwide civil-defence drills run as 'pre-scheduled'."
+          }
+        ],
+        "PRC": [
+          {
+            "id": "prc-t3-blockade",
+            "faction": "PRC",
+            "summary": "Announce maritime exclusion zone around Taiwan",
+            "details": "PRC unilaterally announces 7-day maritime exclusion zone covering key Taiwan ports under guise of live-fire exercises."
+          },
+          {
+            "id": "prc-t3-cyber",
+            "faction": "PRC",
+            "summary": "Disruptive cyber operations on Taiwan logistics",
+            "details": "Cyber operations move from probe to disruption: targeting Taiwan port and logistics scheduling systems."
+          }
+        ]
+      }
+    },
+    {
+      "turn": 4,
+      "narrative": "Decision turn: either de-escalation track gains traction or both sides commit to a posture they cannot back away from quickly.",
+      "actions": {
+        "USA": [
+          {
+            "id": "usa-t4-call",
+            "faction": "USA",
+            "summary": "Hold leader-level call; publicly reaffirm One-China policy framing while conducting FONOP",
+            "details": "POTUS-Xi call held; US publicly reaffirms longstanding One-China policy framing while quietly proceeding with the joint allied FONOP."
+          }
+        ],
+        "ROC": [
+          {
+            "id": "roc-t4-restraint",
+            "faction": "ROC",
+            "summary": "Public restraint and request for international observers",
+            "details": "President of Taiwan publicly calls for restraint by all parties; requests international observers for the announced PRC exercise zone."
+          }
+        ],
+        "PRC": [
+          {
+            "id": "prc-t4-extend",
+            "faction": "PRC",
+            "summary": "Extend exclusion zone by 7 days; begin live-fire",
+            "details": "PRC extends maritime exclusion zone by another 7 days and begins live-fire portions of the announced exercise."
+          }
+        ]
+      }
+    }
+  ]
+}

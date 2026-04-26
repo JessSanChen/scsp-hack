@@ -1,0 +1,86 @@
+{
+  "id": "taiwan-2026",
+  "name": "Taiwan Strait 2026",
+  "description": "A fictional 2026 US-China crisis over Taiwan, distilled from the LLMWargaming Taiwan Strait scenario (https://arxiv.org/abs/2403.03407). Three factions (USA, ROC/Taiwan, PRC) take pre-scripted actions while the adjudicator resolves escalation outcomes.",
+  "factions": [
+    {
+      "id": "USA",
+      "name": "United States of America",
+      "shortName": "USA",
+      "brief": "Two carrier strike groups in the western Pacific, reinforcing posture in northern Philippines, scheduling combined drills with Australia and Japan. Wants to deter PRC action without triggering open war.",
+      "objectives": [
+        "Deter PRC invasion of Taiwan",
+        "Maintain credibility with allies (Japan, Australia, Philippines)",
+        "Avoid escalation that forces direct US-PRC kinetic exchange",
+        "Preserve domestic political support for Indo-Pacific posture"
+      ],
+      "initialPosture": "5th CSG (USS Ronald Reagan) in vicinity of Taiwan Strait; 3rd CSG (USS Abraham Lincoln) en route from San Diego. Increased air/sea patrols. INDOPACOM publicly framing activity as routine."
+    },
+    {
+      "id": "ROC",
+      "name": "Republic of China (Taiwan)",
+      "shortName": "Taiwan",
+      "brief": "Defending island. Recently announced US weapons package (long-range artillery, anti-air, anti-ship missiles, C3 systems) integrating with up to 1000 US advisors on island.",
+      "objectives": [
+        "Preserve de facto sovereignty",
+        "Avoid being the trigger for an open conflict",
+        "Maximise US and allied commitment without provoking invasion",
+        "Maintain population morale and civil order"
+      ],
+      "initialPosture": "Heightened readiness following large PLA bomber sortie in April and June joint exercise. Government cautious in public statements; military on elevated alert."
+    },
+    {
+      "id": "PRC",
+      "name": "People's Republic of China",
+      "shortName": "PRC",
+      "brief": "Conducting major joint exercises around Taiwan, shadowing US CSG with PLAN/CCG/maritime militia. Treating US-Taiwan FM meeting and arms package as 'blatant act of hostility'.",
+      "objectives": [
+        "Reverse perceived US encroachment on PRC sovereignty claims",
+        "Signal resolve to domestic and international audiences",
+        "Avoid premature war that risks regime stability",
+        "Degrade Taiwan's confidence in US security guarantees"
+      ],
+      "initialPosture": "PLA/PLAN/PLAAF/Strategic Rocket Force conducting joint exercises in and around Taiwan Strait, occasionally crossing into Taiwan's territorial airspace and waters. MFA spokesperson publicly warning US is 'playing with fire'."
+    }
+  ],
+  "regions": [
+    {
+      "id": "taiwan-strait",
+      "name": "Taiwan Strait",
+      "description": "Sea space between Taiwan and the PRC mainland. Site of the bulk of current incidents.",
+      "initialPresence": ["USA", "PRC", "ROC"],
+      "initialControl": null
+    },
+    {
+      "id": "taiwan-island",
+      "name": "Taiwan (island)",
+      "description": "ROC territory; up to 1000 US advisors integrating new weapons systems.",
+      "initialPresence": ["ROC", "USA"],
+      "initialControl": "ROC"
+    },
+    {
+      "id": "south-china-sea",
+      "name": "South China Sea",
+      "description": "PLAN, CCG and maritime militia shadowing the 5th CSG.",
+      "initialPresence": ["USA", "PRC"],
+      "initialControl": null
+    },
+    {
+      "id": "northern-philippines",
+      "name": "Northern Philippines",
+      "description": "US reinforcing posture; staging area for combined exercises.",
+      "initialPresence": ["USA"],
+      "initialControl": null
+    }
+  ],
+  "initialTimeline": [
+    "April 2026: PLAAF bomber sortie violates Taiwan ADIZ at unusual scale.",
+    "May 2026: US announces major weapons package for Taiwan plus up to 1000 advisors.",
+    "May 2026: US Secretary of State meets Taiwan's Foreign Minister at UN sustainable development conference; PRC People's Daily op-ed calls it a 'blatant act of hostility'.",
+    "June 2026: PRC holds joint PLA/PLAN/PLAAF/Strategic Rocket Force exercises around Taiwan, crossing into ROC territorial airspace and waters.",
+    "June 2026: US deploys 5th CSG (USS Ronald Reagan) toward Taiwan Strait; 3rd CSG (USS Abraham Lincoln) deploys from San Diego.",
+    "June 2026: US increases air and sea patrols and reinforces northern Philippines.",
+    "June 2026: PRC MFA warns US is 'playing with fire'; PLAN/CCG/maritime militia shadow the 5th CSG."
+  ],
+  "turnCount": 4
+}

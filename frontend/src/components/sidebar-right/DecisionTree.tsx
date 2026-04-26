@@ -1,13 +1,23 @@
 import { useState } from 'react';
-import type { GameState, OutcomeCandidate } from '../../mockData';
+import type {
+  UiGameState,
+  UiOutcomeCandidate,
+  UiTurnData,
+} from '../../sim/uiState';
+import type { AppPhase } from '../../App';
 
-// Layout constants
-const COL_X = [38, 118, 198];          // x-center of each turn column
-const ROW_Y = [52, 112, 172];          // y-center of each candidate row
-const NODE_W = 68;
-const NODE_H = 34;
-const VIEW_W = 248;
-const VIEW_H = 230;
+const COL_X = [60, 152, 244, 336];
+const ROW_Y_BASE = [62, 118, 174];
+const ROW_Y_FORK = [248, 304, 360];
+const NODE_W = 84;
+const NODE_H = 48;
+const VIEW_W = 396;
+const VIEW_H = 400;
+const SOLO_ROW_Y = [70, 140, 210];
+const SOLO_VIEW_H = 270;
+
+const BASELINE_ACCENT = 'rgba(56,189,248,0.55)';
+const FORK_ACCENT = 'rgba(251,191,36,0.65)';
 
 function conseqColor(c: number, alpha = 1): string {
   if (c <= 2) return `rgba(34,197,94,${alpha})`;
@@ -18,252 +28,294 @@ function conseqColor(c: number, alpha = 1): string {
 interface NodeInfo {
   cx: number;
   cy: number;
-  candidate: OutcomeCandidate;
+  candidate: UiOutcomeCandidate;
   selected: boolean;
-  isPending: boolean;
+  pending: boolean;
   turn: number;
+  track: 'baseline' | 'fork';
+  recommendedFork?: boolean;
 }
 
-interface Props { state: GameState; }
+interface Props {
+  baseline: UiGameState;
+  fork: UiGameState | null;
+  phase: AppPhase;
+  recommendedForkTurn: number | null;
+  onForkClick: () => void;
+  forkSelectable: boolean;
+}
 
-export function DecisionTree({ state }: Props) {
+export function DecisionTree({
+  baseline,
+  fork,
+  phase,
+  recommendedForkTurn,
+  onForkClick,
+  forkSelectable,
+}: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
 
-  // Build node list: one column per completed turn + one for pending
-  const nodes: NodeInfo[] = [];
-
-  state.turns.forEach((t, colIdx) => {
-    if (colIdx >= COL_X.length - 1) return; // max 2 completed turns displayed
-    t.candidates.forEach((c, rowIdx) => {
-      if (rowIdx >= ROW_Y.length) return;
-      nodes.push({
-        cx: COL_X[colIdx]!,
-        cy: ROW_Y[rowIdx]!,
-        candidate: c,
-        selected: c.id === t.selectedCandidateId,
-        isPending: false,
-        turn: t.turn,
-      });
-    });
+  const baselineNodes = buildNodes({
+    state: baseline,
+    rowYs: fork ? ROW_Y_BASE : SOLO_ROW_Y,
+    track: 'baseline',
+    recommendedTurn: recommendedForkTurn,
+    pulseRecommended: phase === 'baseline-done' && forkSelectable,
   });
+  const forkNodes = fork
+    ? buildNodes({
+        state: fork,
+        rowYs: ROW_Y_FORK,
+        track: 'fork',
+      })
+    : [];
 
-  // Pending candidates in last column
-  state.pendingCandidates.forEach((c, rowIdx) => {
-    if (rowIdx >= ROW_Y.length) return;
-    nodes.push({
-      cx: COL_X[COL_X.length - 1]!,
-      cy: ROW_Y[rowIdx]!,
-      candidate: c,
-      selected: false,
-      isPending: true,
-      turn: state.currentTurn + 1,
-    });
-  });
+  const baselineLines = buildLines(baselineNodes, baseline);
+  const forkLines = fork ? buildLines(forkNodes, fork) : [];
 
-  // Lines: from selected node of col N to all nodes of col N+1
-  const lines: Array<{ x1: number; y1: number; x2: number; y2: number; isSelected: boolean }> = [];
-  state.turns.forEach((t, colIdx) => {
-    if (colIdx >= COL_X.length - 1) return;
-    const selNode = nodes.find(n => n.turn === t.turn && n.candidate.id === t.selectedCandidateId);
-    if (!selNode) return;
-    const nextColIdx = colIdx + 1;
-    const nextTurn = state.turns[nextColIdx];
-    const nextCandidates = nextTurn ? nextTurn.candidates : state.pendingCandidates;
-    nextCandidates.forEach((nc, rowIdx) => {
-      if (rowIdx >= ROW_Y.length) return;
-      const tx = COL_X[nextColIdx]!;
-      const ty = ROW_Y[rowIdx]!;
-      const isSelPath = nextTurn
-        ? nc.id === nextTurn.selectedCandidateId
-        : false;
-      lines.push({
-        x1: selNode.cx + NODE_W / 2,
-        y1: selNode.cy,
-        x2: tx - NODE_W / 2,
-        y2: ty,
-        isSelected: isSelPath,
-      });
-    });
-  });
+  const allNodes = [...baselineNodes, ...forkNodes];
+  const hoveredNode = allNodes.find((n) => `${n.track}-${n.candidate.id}-${n.turn}` === hovered);
 
-  // Lines from last completed turn's selected node to pending candidates
-  const lastTurn = state.turns[state.turns.length - 1];
-  if (lastTurn && state.pendingCandidates.length > 0) {
-    const lastColIdx = state.turns.length - 1;
-    if (lastColIdx < COL_X.length - 1) {
-      const selNode = nodes.find(
-        n => n.turn === lastTurn.turn && n.candidate.id === lastTurn.selectedCandidateId
-      );
-      if (selNode) {
-        state.pendingCandidates.forEach((_nc, rowIdx) => {
-          if (rowIdx >= ROW_Y.length) return;
-          lines.push({
-            x1: selNode.cx + NODE_W / 2,
-            y1: selNode.cy,
-            x2: COL_X[COL_X.length - 1]! - NODE_W / 2,
-            y2: ROW_Y[rowIdx]!,
-            isSelected: false,
-          });
-        });
-      }
-    }
-  }
-
-  const hoveredNode = nodes.find(n => n.candidate.id === hovered);
+  const viewH = fork ? VIEW_H : SOLO_VIEW_H;
 
   return (
     <>
       <div className="section-label">
         <span>DECISION TREE</span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 8 }}>
-          <span style={{ color: 'var(--text-secondary)' }}>
-            T{state.currentTurn}/{state.totalTurns}
-          </span>
-          {state.status === 'pending' && (
-            <span style={{ color: '#f59e0b', letterSpacing: '0.12em' }}>PENDING</span>
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 8,
+          }}
+        >
+          {fork ? (
+            <>
+              <span style={{ color: '#7dd3fc' }}>BASE T{baseline.currentTurn}</span>
+              <span style={{ color: '#fbbf24' }}>FORK T{fork.currentTurn}</span>
+            </>
+          ) : (
+            <span style={{ color: 'var(--text-secondary)' }}>
+              T{baseline.currentTurn}/{baseline.totalTurns || 4}
+            </span>
           )}
         </div>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', padding: '4px 8px 4px' }}>
-        {/* Column turn labels */}
         <svg
-          viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+          viewBox={`0 0 ${VIEW_W} ${viewH}`}
           style={{ width: '100%', height: '100%', overflow: 'visible' }}
         >
-          {/* Turn column headers */}
-          {COL_X.map((x, i) => {
-            const isLast = i === COL_X.length - 1;
-            return (
-              <text
-                key={i}
-                x={x}
-                y={18}
-                textAnchor="middle"
-                fontFamily="var(--font-mono)"
-                fontSize="8"
-                fill={isLast ? 'rgba(245,158,11,0.7)' : 'rgba(56,189,248,0.45)'}
-                letterSpacing="1"
-              >
-                {isLast ? `T${state.currentTurn + 1}?` : `T${i + 1}`}
-              </text>
-            );
-          })}
-
-          {/* Column separators */}
-          {COL_X.slice(0, -1).map((x, i) => (
-            <line
+          {COL_X.map((x, i) => (
+            <text
               key={i}
-              x1={(x + COL_X[i + 1]!) / 2}
-              y1={24}
-              x2={(x + COL_X[i + 1]!) / 2}
-              y2={VIEW_H - 8}
-              stroke="rgba(255,255,255,0.04)"
-              strokeWidth="0.5"
-              strokeDasharray="3 5"
+              x={x}
+              y={20}
+              textAnchor="middle"
+              fontFamily="var(--font-mono)"
+              fontSize="11"
+              fontWeight="600"
+              fill="rgba(56,189,248,0.6)"
+              letterSpacing="2"
+            >
+              T{i + 1}
+            </text>
+          ))}
+          {recommendedForkTurn !== null && fork && (
+            <line
+              x1={(COL_X[recommendedForkTurn - 1] ?? 0) - NODE_W / 2 - 4}
+              y1={20}
+              x2={(COL_X[recommendedForkTurn - 1] ?? 0) - NODE_W / 2 - 4}
+              y2={viewH - 8}
+              stroke="rgba(251,191,36,0.45)"
+              strokeWidth="0.7"
+              strokeDasharray="3 3"
+            />
+          )}
+
+          {fork && (
+            <text
+              x={8}
+              y={ROW_Y_BASE[0]! - 26}
+              fontFamily="var(--font-mono)"
+              fontSize="10"
+              fontWeight="600"
+              fill="#7dd3fc"
+              letterSpacing="2"
+            >
+              BASELINE
+            </text>
+          )}
+          {fork && (
+            <text
+              x={8}
+              y={ROW_Y_FORK[0]! - 26}
+              fontFamily="var(--font-mono)"
+              fontSize="10"
+              fontWeight="600"
+              fill="#fbbf24"
+              letterSpacing="2"
+            >
+              FORK
+            </text>
+          )}
+
+          {baselineLines.map((l, i) => (
+            <line
+              key={`bl-${i}`}
+              x1={l.x1}
+              y1={l.y1}
+              x2={l.x2}
+              y2={l.y2}
+              stroke={l.isSelected ? BASELINE_ACCENT : 'rgba(255,255,255,0.08)'}
+              strokeWidth={l.isSelected ? 1.4 : 0.7}
+              strokeDasharray={l.isSelected ? undefined : '3 4'}
             />
           ))}
-
-          {/* Connector lines */}
-          {lines.map((l, i) => (
+          {forkLines.map((l, i) => (
             <line
-              key={i}
-              x1={l.x1} y1={l.y1}
-              x2={l.x2} y2={l.y2}
-              stroke={l.isSelected ? 'rgba(56,189,248,0.5)' : 'rgba(255,255,255,0.08)'}
-              strokeWidth={l.isSelected ? 1.5 : 0.8}
+              key={`fl-${i}`}
+              x1={l.x1}
+              y1={l.y1}
+              x2={l.x2}
+              y2={l.y2}
+              stroke={l.isSelected ? FORK_ACCENT : 'rgba(251,191,36,0.18)'}
+              strokeWidth={l.isSelected ? 1.4 : 0.7}
               strokeDasharray={l.isSelected ? undefined : '3 4'}
             />
           ))}
 
-          {/* Nodes */}
-          {nodes.map((n) => {
-            const isHovered = hovered === n.candidate.id;
+          {allNodes.map((n) => {
+            const key = `${n.track}-${n.candidate.id}-${n.turn}`;
+            const isHovered = hovered === key;
             const baseColor = conseqColor(n.candidate.consequentiality);
-            const fillAlpha = n.selected ? 0.18 : n.isPending ? 0.1 : 0.06;
-            const strokeAlpha = n.selected ? 0.85 : n.isPending ? 0.55 : 0.22;
-            const textOpacity = n.selected ? 1 : n.isPending ? 0.8 : 0.45;
+            const fillAlpha = n.selected ? 0.2 : n.pending ? 0.1 : 0.06;
+            const strokeAlpha = n.selected ? 0.85 : n.pending ? 0.55 : 0.22;
+            const textOpacity = n.selected ? 1 : n.pending ? 0.8 : 0.55;
             const nx = n.cx - NODE_W / 2;
             const ny = n.cy - NODE_H / 2;
+            const trackAccent =
+              n.track === 'baseline' ? BASELINE_ACCENT : FORK_ACCENT;
+            const clickable =
+              n.track === 'baseline' && n.recommendedFork && forkSelectable;
 
             return (
               <g
-                key={n.candidate.id}
-                style={{ cursor: 'pointer' }}
-                onMouseEnter={() => setHovered(n.candidate.id)}
+                key={key}
+                style={{ cursor: clickable ? 'pointer' : 'default' }}
+                onMouseEnter={() => setHovered(key)}
                 onMouseLeave={() => setHovered(null)}
+                onClick={clickable ? onForkClick : undefined}
               >
-                {/* Glow for selected */}
+                {n.recommendedFork && (
+                  <rect
+                    x={nx - 3}
+                    y={ny - 3}
+                    width={NODE_W + 6}
+                    height={NODE_H + 6}
+                    rx={5}
+                    ry={5}
+                    fill="none"
+                    stroke={FORK_ACCENT}
+                    strokeWidth={1.6}
+                    strokeDasharray="4 3"
+                  >
+                    <animate
+                      attributeName="stroke-opacity"
+                      values="0.4;1;0.4"
+                      dur="1.6s"
+                      repeatCount="indefinite"
+                    />
+                  </rect>
+                )}
                 {n.selected && (
                   <rect
-                    x={nx - 2} y={ny - 2}
-                    width={NODE_W + 4} height={NODE_H + 4}
-                    rx={4} ry={4}
+                    x={nx - 2}
+                    y={ny - 2}
+                    width={NODE_W + 4}
+                    height={NODE_H + 4}
+                    rx={4}
+                    ry={4}
                     fill="none"
-                    stroke={conseqColor(n.candidate.consequentiality, 0.3)}
-                    strokeWidth={4}
-                    style={{ filter: 'blur(4px)' }}
+                    stroke={trackAccent}
+                    strokeWidth={3.5}
+                    style={{ filter: 'blur(3px)' }}
                   />
                 )}
-                {/* Hover glow */}
                 {isHovered && (
                   <rect
-                    x={nx - 1} y={ny - 1}
-                    width={NODE_W + 2} height={NODE_H + 2}
-                    rx={3.5} ry={3.5}
+                    x={nx - 1}
+                    y={ny - 1}
+                    width={NODE_W + 2}
+                    height={NODE_H + 2}
+                    rx={3.5}
+                    ry={3.5}
                     fill="none"
                     stroke="rgba(255,255,255,0.25)"
                     strokeWidth={2}
                     style={{ filter: 'blur(2px)' }}
                   />
                 )}
-                {/* Node body */}
                 <rect
-                  x={nx} y={ny}
-                  width={NODE_W} height={NODE_H}
-                  rx={3} ry={3}
+                  x={nx}
+                  y={ny}
+                  width={NODE_W}
+                  height={NODE_H}
+                  rx={3}
+                  ry={3}
                   fill={conseqColor(n.candidate.consequentiality, fillAlpha)}
                   stroke={conseqColor(n.candidate.consequentiality, strokeAlpha)}
                   strokeWidth={n.selected ? 1.2 : 0.7}
                 />
-                {/* Probability bar at bottom of node */}
                 <rect
-                  x={nx + 2} y={ny + NODE_H - 5}
-                  width={(NODE_W - 4) * n.candidate.probability}
-                  height={3}
-                  rx={1.5}
+                  x={nx + 3}
+                  y={ny + NODE_H - 6}
+                  width={(NODE_W - 6) * n.candidate.probability}
+                  height={4}
+                  rx={2}
                   fill={baseColor}
-                  opacity={n.selected || n.isPending ? 0.6 : 0.25}
+                  opacity={n.selected || n.pending ? 0.7 : 0.3}
                 />
-                {/* Summary text */}
-                <foreignObject x={nx + 3} y={ny + 3} width={NODE_W - 6} height={NODE_H - 10}>
+                <text
+                  x={nx + NODE_W - 4}
+                  y={ny + NODE_H - 8}
+                  textAnchor="end"
+                  fontFamily="var(--font-mono)"
+                  fontSize="7"
+                  fill={`rgba(226,232,240,${0.4 + textOpacity * 0.4})`}
+                >
+                  {Math.round(n.candidate.probability * 100)}%
+                </text>
+                <foreignObject
+                  x={nx + 4}
+                  y={ny + 4}
+                  width={NODE_W - 8}
+                  height={NODE_H - 12}
+                >
                   <div
                     style={{
                       fontFamily: 'var(--font-mono)',
-                      fontSize: 6.5,
-                      lineHeight: 1.3,
+                      fontSize: 9,
+                      lineHeight: 1.25,
                       color: `rgba(226,232,240,${textOpacity})`,
                       overflow: 'hidden',
                       height: '100%',
                       display: '-webkit-box',
-                      WebkitLineClamp: 2,
+                      WebkitLineClamp: 3,
                       WebkitBoxOrient: 'vertical',
+                      letterSpacing: '0.02em',
                     }}
                   >
                     {n.candidate.summary}
                   </div>
                 </foreignObject>
-                {/* Selected marker */}
                 {n.selected && (
-                  <circle
-                    cx={nx + NODE_W - 6}
-                    cy={ny + 6}
-                    r={3}
-                    fill={baseColor}
-                  />
+                  <circle cx={nx + NODE_W - 6} cy={ny + 6} r={3} fill={baseColor} />
                 )}
-                {/* Pending spinner / question mark */}
-                {n.isPending && (
+                {n.pending && (
                   <text
                     x={nx + NODE_W - 7}
                     y={ny + 9}
@@ -279,7 +331,6 @@ export function DecisionTree({ state }: Props) {
           })}
         </svg>
 
-        {/* Tooltip */}
         {hoveredNode && (
           <div
             style={{
@@ -299,20 +350,144 @@ export function DecisionTree({ state }: Props) {
               <span className={`conseq conseq-${hoveredNode.candidate.consequentiality}`}>
                 C{hoveredNode.candidate.consequentiality}
               </span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-secondary)' }}>
-                p={Math.round(hoveredNode.candidate.probability * 100)}%
-                {' '}conf={Math.round(hoveredNode.candidate.confidence * 100)}%
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 9,
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                p={Math.round(hoveredNode.candidate.probability * 100)}% conf=
+                {Math.round(hoveredNode.candidate.confidence * 100)}%
               </span>
             </div>
-            <p style={{ fontSize: 10.5, color: 'var(--text-primary)', lineHeight: 1.4, marginBottom: 3 }}>
+            <p style={{ fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.4, marginBottom: 4 }}>
               {hoveredNode.candidate.summary}
             </p>
-            <p style={{ fontSize: 9.5, color: 'var(--text-secondary)', lineHeight: 1.35, fontStyle: 'italic' }}>
+            <p
+              style={{
+                fontSize: 11,
+                color: 'var(--text-secondary)',
+                lineHeight: 1.4,
+                fontStyle: 'italic',
+              }}
+            >
               {hoveredNode.candidate.rationale}
             </p>
+            {hoveredNode.recommendedFork && (
+              <p
+                style={{
+                  marginTop: 6,
+                  fontSize: 11,
+                  color: '#fbbf24',
+                  fontFamily: 'var(--font-mono)',
+                  letterSpacing: '0.1em',
+                  fontWeight: 600,
+                }}
+              >
+                CLICK TO FORK FROM THIS DECISION
+              </p>
+            )}
           </div>
         )}
       </div>
     </>
   );
+}
+
+function buildNodes(opts: {
+  state: UiGameState;
+  rowYs: number[];
+  track: 'baseline' | 'fork';
+  recommendedTurn?: number | null;
+  pulseRecommended?: boolean;
+}): NodeInfo[] {
+  const { state, rowYs, track, recommendedTurn, pulseRecommended } = opts;
+  const nodes: NodeInfo[] = [];
+
+  const turns: UiTurnData[] = state.turns;
+  const lastTurn = turns[turns.length - 1];
+
+  turns.forEach((t) => {
+    const colIdx = Math.min(COL_X.length - 1, Math.max(0, t.turn - 1));
+    t.candidates.forEach((c, rowIdx) => {
+      if (rowIdx >= rowYs.length) return;
+      const isRecommendedTurn =
+        track === 'baseline' &&
+        pulseRecommended === true &&
+        recommendedTurn !== null &&
+        recommendedTurn !== undefined &&
+        t.turn === recommendedTurn &&
+        c.id === t.selectedCandidateId;
+      nodes.push({
+        cx: COL_X[colIdx]!,
+        cy: rowYs[rowIdx]!,
+        candidate: c,
+        selected: c.id === t.selectedCandidateId,
+        pending: false,
+        turn: t.turn,
+        track,
+        recommendedFork: isRecommendedTurn,
+      });
+    });
+  });
+
+  if (state.pendingCandidates.length > 0 && state.pendingTurn !== undefined) {
+    const pTurn = state.pendingTurn;
+    const colIdx = Math.min(COL_X.length - 1, Math.max(0, pTurn - 1));
+    state.pendingCandidates.forEach((c, rowIdx) => {
+      if (rowIdx >= rowYs.length) return;
+      // skip if we already added a non-pending node in the same column for this candidate
+      if (lastTurn?.turn === pTurn && lastTurn.candidates.some((cc) => cc.id === c.id)) return;
+      nodes.push({
+        cx: COL_X[colIdx]!,
+        cy: rowYs[rowIdx]!,
+        candidate: c,
+        selected: false,
+        pending: true,
+        turn: pTurn,
+        track,
+      });
+    });
+  }
+
+  return nodes;
+}
+
+function buildLines(
+  nodes: NodeInfo[],
+  state: UiGameState,
+): Array<{ x1: number; y1: number; x2: number; y2: number; isSelected: boolean }> {
+  const lines: Array<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    isSelected: boolean;
+  }> = [];
+
+  state.turns.forEach((t) => {
+    const fromNode = nodes.find((n) => n.turn === t.turn && n.candidate.id === t.selectedCandidateId);
+    if (!fromNode) return;
+    const nextTurn = state.turns.find((tt) => tt.turn === t.turn + 1);
+    const nextCandidates = nextTurn ? nextTurn.candidates : state.pendingCandidates;
+    const nextSelectedId = nextTurn?.selectedCandidateId;
+    nextCandidates.forEach((nc) => {
+      const target = nodes.find(
+        (n) =>
+          n.candidate.id === nc.id &&
+          n.turn === (nextTurn ? nextTurn.turn : state.pendingTurn ?? t.turn + 1),
+      );
+      if (!target) return;
+      lines.push({
+        x1: fromNode.cx + NODE_W / 2,
+        y1: fromNode.cy,
+        x2: target.cx - NODE_W / 2,
+        y2: target.cy,
+        isSelected: nextSelectedId === nc.id,
+      });
+    });
+  });
+
+  return lines;
 }

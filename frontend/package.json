@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prepare-demo": "node scripts/prepare-demo.mjs",
+    "predev": "npm run prepare-demo",
     "dev": "vite",
+    "prebuild": "npm run prepare-demo",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview"
   },

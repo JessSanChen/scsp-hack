@@ -3,8 +3,12 @@ import { useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { TACTICAL_UNITS } from '../data/tacticalUnits';
 import { FACTION_COLOR } from '../data/mapTypes';
-import { interpolatePosition } from '../hooks/useMapAnimation';
-import type { TacticalUnit } from '../data/mapTypes';
+import {
+  interpolatePosition,
+  interpolateThreatScale,
+  interpolateVisibility,
+} from '../hooks/useMapAnimation';
+import type { TacticalUnit, Timeline } from '../data/mapTypes';
 
 const NM_TO_KM = 1.852;
 
@@ -16,7 +20,6 @@ function unitShape(unit: TacticalUnit): string {
   if (unit.domain === 'sea') {
     return `<polygon points="12,1 23,12 12,23 1,12" fill="${c}" opacity="0.92" stroke="${c}" stroke-width="0.5"/>`;
   }
-  // land
   return `<rect x="2" y="2" width="20" height="20" rx="2" fill="${c}" opacity="0.92" stroke="${c}" stroke-width="0.5"/>`;
 }
 
@@ -35,24 +38,27 @@ function makeDivIcon(unit: TacticalUnit): L.DivIcon {
   });
 }
 
-interface Props { currentTick: number; }
+interface Props {
+  currentTick: number;
+  timeline: Timeline;
+}
 
-export function TacticalLayer({ currentTick }: Props) {
+export function TacticalLayer({ currentTick, timeline }: Props) {
   const map = useMap();
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
   const circlesRef = useRef<Map<string, L.Circle>>(new Map());
   const mountedRef = useRef(false);
 
-  // Initial mount: create all markers
   useEffect(() => {
     if (mountedRef.current) return;
     mountedRef.current = true;
 
     for (const unit of TACTICAL_UNITS) {
-      const pos = interpolatePosition(unit, 0);
+      const pos = interpolatePosition(unit, 0, timeline);
       const marker = L.marker([pos.lat, pos.lng], {
         icon: makeDivIcon(unit),
         zIndexOffset: unit.domain === 'air' ? 200 : unit.domain === 'sea' ? 100 : 0,
+        opacity: interpolateVisibility(unit, 0, timeline),
       });
       marker.bindTooltip(`<b>${unit.name}</b><br/>${unit.faction} · ${unit.domain.toUpperCase()}`, {
         className: 'tactical-tooltip',
@@ -62,15 +68,16 @@ export function TacticalLayer({ currentTick }: Props) {
       marker.addTo(map);
       markersRef.current.set(unit.id, marker);
 
-      // Threat radius circle (sea + land units only)
       if (unit.threatRadiusNm && unit.domain !== 'air') {
+        const scale = interpolateThreatScale(unit, 0);
         const circle = L.circle([pos.lat, pos.lng], {
-          radius: unit.threatRadiusNm * NM_TO_KM * 1000,
+          radius: unit.threatRadiusNm * NM_TO_KM * 1000 * scale,
           color: FACTION_COLOR[unit.faction],
           weight: 0.6,
           fillColor: FACTION_COLOR[unit.faction],
           fillOpacity: 0.04,
           dashArray: '4 6',
+          opacity: 0.55,
         });
         circle.addTo(map);
         circlesRef.current.set(unit.id, circle);
@@ -84,16 +91,27 @@ export function TacticalLayer({ currentTick }: Props) {
       markersRef.current.clear();
       circlesRef.current.clear();
     };
-  }, [map]);
+  }, [map, timeline]);
 
-  // Update positions every time currentTick changes — imperative, no re-render
+  // Imperative position updates per tick
   useEffect(() => {
     for (const unit of TACTICAL_UNITS) {
-      const pos = interpolatePosition(unit, currentTick);
+      const pos = interpolatePosition(unit, currentTick, timeline);
       const ll: L.LatLngExpression = [pos.lat, pos.lng];
+      const visibility = interpolateVisibility(unit, currentTick, timeline);
+      const m = markersRef.current.get(unit.id);
+      m?.setLatLng(ll);
+      m?.setOpacity(visibility);
 
-      markersRef.current.get(unit.id)?.setLatLng(ll);
-      circlesRef.current.get(unit.id)?.setLatLng(ll);
+      const c = circlesRef.current.get(unit.id);
+      if (c) {
+        c.setLatLng(ll);
+        if (unit.threatRadiusNm) {
+          const scale = interpolateThreatScale(unit, currentTick);
+          c.setRadius(unit.threatRadiusNm * NM_TO_KM * 1000 * scale);
+          c.setStyle({ opacity: 0.55 * visibility, fillOpacity: 0.04 * visibility });
+        }
+      }
     }
   });
 

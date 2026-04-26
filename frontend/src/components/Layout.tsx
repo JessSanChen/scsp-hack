@@ -1,26 +1,53 @@
-import type { GameState } from '../mockData';
+import type { ReplayPlayer } from '../sim/useReplayPlayer';
+import type { DemoManifest, DemoManifestFork } from '../sim/manifest';
+import type { AppPhase, ForkSelection } from '../App';
+import type { Timeline } from './map/data/mapTypes';
 import { TaiwanMap } from './map/TaiwanMap';
 import { NewsFeed } from './sidebar-left/NewsFeed';
 import { StatsPanel } from './sidebar-left/StatsPanel';
 import { DecisionTree } from './sidebar-right/DecisionTree';
 import { OutcomesPanel } from './sidebar-right/OutcomesPanel';
+import { ForkSuggestionBanner } from './sidebar-right/ForkSuggestionBanner';
 
-interface Props { state: GameState; }
+interface Props {
+  baseline: ReplayPlayer;
+  fork: ReplayPlayer | null;
+  manifest: DemoManifest | null;
+  forkSelection: ForkSelection | null;
+  phase: AppPhase;
+  activePlayer: ReplayPlayer;
+  activeTimeline: Timeline;
+  onSelectFork: (fork: DemoManifestFork) => void;
+}
 
-export function Layout({ state }: Props) {
+export function Layout({
+  baseline,
+  fork,
+  manifest,
+  forkSelection,
+  phase,
+  activePlayer,
+  activeTimeline,
+  onSelectFork,
+}: Props) {
+  const showForkSuggestion =
+    !forkSelection &&
+    phase === 'baseline-done' &&
+    manifest &&
+    manifest.forks.length > 0;
+
   return (
     <div
       style={{
         flex: 1,
         minHeight: 0,
         display: 'grid',
-        gridTemplateColumns: '272px 1fr 316px',
+        gridTemplateColumns: '320px 1fr 400px',
         gap: 6,
         padding: 6,
         overflow: 'hidden',
       }}
     >
-      {/* ── Left sidebar ── */}
       <aside
         style={{
           display: 'flex',
@@ -32,19 +59,38 @@ export function Layout({ state }: Props) {
       >
         <div
           className="glass"
-          style={{ flex: '1 1 58%', display: 'flex', flexDirection: 'column', minHeight: 0, borderRadius: 4, overflow: 'hidden' }}
+          style={{
+            flex: '1 1 68%',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            borderRadius: 4,
+            overflow: 'hidden',
+          }}
         >
-          <NewsFeed items={state.news} />
+          <NewsFeed
+            baseline={baseline.state}
+            fork={fork?.state ?? null}
+          />
         </div>
         <div
           className="glass"
-          style={{ flex: '1 1 42%', display: 'flex', flexDirection: 'column', minHeight: 0, borderRadius: 4, overflow: 'hidden' }}
+          style={{
+            flex: '1 1 32%',
+            minHeight: 220,
+            display: 'flex',
+            flexDirection: 'column',
+            borderRadius: 4,
+            overflow: 'hidden',
+          }}
         >
-          <StatsPanel stats={state.historicalStats} />
+          <StatsPanel
+            baseline={baseline.state}
+            fork={fork?.state ?? null}
+          />
         </div>
       </aside>
 
-      {/* ── Center map ── */}
       <main
         className="glass"
         style={{
@@ -60,11 +106,10 @@ export function Layout({ state }: Props) {
           <div className="dot" />
         </div>
         <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-          <TaiwanMap state={state} />
+          <TaiwanMap activePlayer={activePlayer} phase={phase} timeline={activeTimeline} />
         </div>
       </main>
 
-      {/* ── Right sidebar ── */}
       <aside
         style={{
           display: 'flex',
@@ -74,17 +119,49 @@ export function Layout({ state }: Props) {
           overflow: 'hidden',
         }}
       >
+        {showForkSuggestion && manifest && (
+          <ForkSuggestionBanner
+            fork={manifest.forks[0]}
+            onSelect={onSelectFork}
+          />
+        )}
         <div
           className="glass"
-          style={{ flex: '1 1 55%', display: 'flex', flexDirection: 'column', minHeight: 0, borderRadius: 4, overflow: 'hidden' }}
+          style={{
+            flex: '1 1 70%',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            borderRadius: 4,
+            overflow: 'hidden',
+          }}
         >
-          <DecisionTree state={state} />
+          <DecisionTree
+            baseline={baseline.state}
+            fork={fork?.state ?? null}
+            phase={phase}
+            recommendedForkTurn={manifest?.forks[0]?.fromTurn ?? null}
+            onForkClick={() => {
+              if (manifest?.forks[0]) onSelectFork(manifest.forks[0]);
+            }}
+            forkSelectable={!forkSelection && phase === 'baseline-done'}
+          />
         </div>
         <div
           className="glass"
-          style={{ flex: '1 1 45%', display: 'flex', flexDirection: 'column', minHeight: 0, borderRadius: 4, overflow: 'hidden' }}
+          style={{
+            flex: '1 1 30%',
+            minHeight: 200,
+            display: 'flex',
+            flexDirection: 'column',
+            borderRadius: 4,
+            overflow: 'hidden',
+          }}
         >
-          <OutcomesPanel state={state} />
+          <OutcomesPanel
+            baseline={baseline.state}
+            fork={fork?.state ?? null}
+          />
         </div>
       </aside>
     </div>

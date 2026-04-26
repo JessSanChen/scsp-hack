@@ -1,0 +1,46 @@
+%%{init: {'theme':'dark', 'flowchart': {'curve':'basis', 'htmlLabels': false, 'nodeSpacing': 30, 'rankSpacing': 50}}}%%
+sequenceDiagram
+    autonumber
+    participant W as WorldState
+    participant PUSA as USA player LLM
+    participant PPRC as PRC player LLM
+    participant PROC as ROC player LLM
+    participant ADJ as Adjudicator LLM
+    participant RNG as Seeded RNG
+    participant L as events.jsonl
+    participant B as Briefer
+
+    Note over W,L: turn N has just settled
+
+    L->>L: TURN_START turn=N+1
+
+    par USA
+      W-->>PUSA: state + USA briefing(N)
+      PUSA->>L: PLAYER_DECISION (USA)<br/>actions[] + rationale
+    and PRC
+      W-->>PPRC: state + PRC briefing(N)
+      PPRC->>L: PLAYER_DECISION (PRC)<br/>actions[] + rationale
+    and ROC
+      W-->>PROC: state + ROC briefing(N)
+      PROC->>L: PLAYER_DECISION (ROC)<br/>actions[] + rationale
+    end
+
+    L->>L: ACTIONS_SUBMITTED
+    PUSA-->>ADJ: actions
+    PPRC-->>ADJ: actions
+    PROC-->>ADJ: actions
+    W-->>ADJ: state
+    ADJ->>L: CANDIDATES_GENERATED<br/>K candidates with p, conseq, delta
+
+    ADJ-->>RNG: candidates + probabilities
+    RNG->>L: OUTCOME_SELECTED<br/>(deterministic for fixed seed)
+
+    RNG-->>W: applyDelta(selected.delta)
+    W->>L: STATE_SNAPSHOT turn=N+1
+
+    par per faction
+      W-->>B: state + visibility filter
+      B->>L: BRIEFING_DELIVERED (faction)
+    end
+
+    Note over W,L: ready for turn N+2

@@ -1,0 +1,57 @@
+%%{init: {'theme':'dark', 'flowchart': {'curve':'basis', 'htmlLabels': false, 'nodeSpacing': 30, 'rankSpacing': 50}}}%%
+flowchart TB
+    classDef scen   fill:#1e293b,stroke:#64748b,color:#e2e8f0
+    classDef world  fill:#0f172a,stroke:#38bdf8,color:#e2e8f0,stroke-width:2px
+    classDef player fill:#172554,stroke:#3b82f6,color:#dbeafe
+    classDef adj    fill:#3b0764,stroke:#a855f7,color:#f3e8ff
+    classDef rng    fill:#422006,stroke:#f59e0b,color:#fef3c7
+    classDef io     fill:#052e16,stroke:#22c55e,color:#dcfce7
+    classDef log    fill:#020617,stroke:#94a3b8,color:#e2e8f0,stroke-dasharray:4 3
+    classDef ui     fill:#1e1b4b,stroke:#818cf8,color:#e0e7ff
+
+    SCEN["Scenario · taiwan-2026<br/>factions · regions · capabilities · actions"]:::scen
+
+    W["WorldState (persistent)<br/>turn · escalationLevel · factions { forces, will, readiness, casualties }<br/>regions { tension, incidents } · commonKnowledge[]"]:::world
+
+    subgraph PLAYERS["1. Player agents · parallel · one LLM call per faction"]
+      direction LR
+      PUSA["USA LLM"]:::player
+      PPRC["PRC LLM"]:::player
+      PROC["ROC LLM"]:::player
+    end
+
+    ADJ["2. Adjudicator LLM<br/>generates K outcome candidates · each with<br/>probability · consequentiality · typed state delta ·<br/>capability citations · outcome-kind tags · narrative"]:::adj
+
+    RNG["3. Seeded RNG<br/>weighted sample over candidates<br/>seedrandom(scenario, turn)"]:::rng
+
+    APPLY["4. Apply delta → new WorldState"]:::io
+
+    BRIEF["5. Briefer · per-faction visibility filter<br/>→ JSON briefing for next turn"]:::io
+
+    LOG[("events.jsonl (append-only)<br/>GAME_STARTED · TURN_START · PLAYER_DECISION x3<br/>ACTIONS_SUBMITTED · CANDIDATES_GENERATED · OUTCOME_SELECTED<br/>STATE_SNAPSHOT · BRIEFING_DELIVERED x3<br/>FORK_FROM (forks only) · GAME_COMPLETE")]:::log
+
+    subgraph CONSUMERS["Consumers (post-hoc, no LLM calls)"]
+      direction LR
+      UI["React replay<br/>(baseline ↔ fork)"]:::ui
+      INSP["CLI inspect"]:::ui
+      FORK["Fork & replay"]:::ui
+      MC["Monte Carlo<br/>(see §2)"]:::ui
+    end
+
+    SCEN --> W
+    W -- "state" --> PLAYERS
+    PLAYERS -- "actions + rationale" --> ADJ
+    W -. "state" .-> ADJ
+    ADJ -- "candidates[]" --> RNG
+    RNG -- "selected" --> APPLY
+    APPLY -- "WorldState'" --> W
+    APPLY --> BRIEF
+    BRIEF -. "next-turn briefings" .-> PLAYERS
+
+    PLAYERS  -. event .-> LOG
+    ADJ      -. event .-> LOG
+    RNG      -. event .-> LOG
+    APPLY    -. event .-> LOG
+    BRIEF    -. event .-> LOG
+
+    LOG --> CONSUMERS

@@ -12,6 +12,9 @@ Every decision is written to an append-only JSONL log so games are
 queryable, replayable, and forkable. A React/Vite frontend reads those
 logs back as a static demo.
 
+> **See [`docs/architecture.md`](docs/architecture.md)** for diagrams of
+> the system end-to-end and the Monte Carlo campaign pipeline.
+
 ## Quick start (engine)
 
 ```bash

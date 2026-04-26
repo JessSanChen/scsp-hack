@@ -6,15 +6,15 @@ import type {
 } from '../../sim/uiState';
 import type { AppPhase } from '../../App';
 
-const COL_X = [60, 152, 244, 336];
-const ROW_Y_BASE = [62, 118, 174];
-const ROW_Y_FORK = [248, 304, 360];
-const NODE_W = 84;
-const NODE_H = 48;
-const VIEW_W = 396;
-const VIEW_H = 400;
-const SOLO_ROW_Y = [70, 140, 210];
-const SOLO_VIEW_H = 270;
+const COL_X = [52, 152, 252, 352];
+const ROW_Y_BASE = [70, 142, 214];
+const ROW_Y_FORK = [296, 368, 440];
+const NODE_W = 96;
+const NODE_H = 64;
+const VIEW_W = 408;
+const VIEW_H = 480;
+const SOLO_ROW_Y = [78, 152, 226];
+const SOLO_VIEW_H = 290;
 
 const BASELINE_ACCENT = 'rgba(56,189,248,0.55)';
 const FORK_ACCENT = 'rgba(251,191,36,0.65)';
@@ -88,7 +88,7 @@ export function DecisionTree({
             gap: 8,
             alignItems: 'center',
             fontFamily: 'var(--font-mono)',
-            fontSize: 8,
+            fontSize: 10,
           }}
         >
           {fork ? (
@@ -104,19 +104,20 @@ export function DecisionTree({
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', padding: '4px 8px 4px' }}>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', padding: '0 8px 4px' }}>
         <svg
           viewBox={`0 0 ${VIEW_W} ${viewH}`}
+          preserveAspectRatio="xMidYMin meet"
           style={{ width: '100%', height: '100%', overflow: 'visible' }}
         >
           {COL_X.map((x, i) => (
             <text
               key={i}
               x={x}
-              y={20}
+              y={12}
               textAnchor="middle"
               fontFamily="var(--font-mono)"
-              fontSize="11"
+              fontSize="14"
               fontWeight="600"
               fill="rgba(56,189,248,0.6)"
               letterSpacing="2"
@@ -127,7 +128,7 @@ export function DecisionTree({
           {recommendedForkTurn !== null && fork && (
             <line
               x1={(COL_X[recommendedForkTurn - 1] ?? 0) - NODE_W / 2 - 4}
-              y1={20}
+              y1={10}
               x2={(COL_X[recommendedForkTurn - 1] ?? 0) - NODE_W / 2 - 4}
               y2={viewH - 8}
               stroke="rgba(251,191,36,0.45)"
@@ -139,9 +140,9 @@ export function DecisionTree({
           {fork && (
             <text
               x={8}
-              y={ROW_Y_BASE[0]! - 26}
+              y={ROW_Y_BASE[0]! - 36}
               fontFamily="var(--font-mono)"
-              fontSize="10"
+              fontSize="12"
               fontWeight="600"
               fill="#7dd3fc"
               letterSpacing="2"
@@ -152,9 +153,9 @@ export function DecisionTree({
           {fork && (
             <text
               x={8}
-              y={ROW_Y_FORK[0]! - 26}
+              y={ROW_Y_FORK[0]! - 36}
               fontFamily="var(--font-mono)"
-              fontSize="10"
+              fontSize="12"
               fontWeight="600"
               fill="#fbbf24"
               letterSpacing="2"
@@ -284,7 +285,7 @@ export function DecisionTree({
                   y={ny + NODE_H - 8}
                   textAnchor="end"
                   fontFamily="var(--font-mono)"
-                  fontSize="7"
+                  fontSize="9"
                   fill={`rgba(226,232,240,${0.4 + textOpacity * 0.4})`}
                 >
                   {Math.round(n.candidate.probability * 100)}%
@@ -293,12 +294,12 @@ export function DecisionTree({
                   x={nx + 4}
                   y={ny + 4}
                   width={NODE_W - 8}
-                  height={NODE_H - 12}
+                  height={NODE_H - 14}
                 >
                   <div
                     style={{
                       fontFamily: 'var(--font-mono)',
-                      fontSize: 9,
+                      fontSize: 11,
                       lineHeight: 1.25,
                       color: `rgba(226,232,240,${textOpacity})`,
                       overflow: 'hidden',
@@ -313,14 +314,14 @@ export function DecisionTree({
                   </div>
                 </foreignObject>
                 {n.selected && (
-                  <circle cx={nx + NODE_W - 6} cy={ny + 6} r={3} fill={baseColor} />
+                  <circle cx={nx + NODE_W - 6} cy={ny + 6} r={3.5} fill={baseColor} />
                 )}
                 {n.pending && (
                   <text
                     x={nx + NODE_W - 7}
-                    y={ny + 9}
+                    y={ny + 11}
                     fill="rgba(245,158,11,0.7)"
-                    fontSize="8"
+                    fontSize="10"
                     fontFamily="var(--font-mono)"
                   >
                     ?

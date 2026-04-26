@@ -1,0 +1,30 @@
+%%{init: {'theme':'dark', 'flowchart': {'curve':'basis', 'htmlLabels': false, 'nodeSpacing': 30, 'rankSpacing': 50}}}%%
+flowchart LR
+    classDef game fill:#0f172a,stroke:#64748b,color:#cbd5e1
+    classDef bin  fill:#172554,stroke:#3b82f6,color:#dbeafe
+    classDef boot fill:#422006,stroke:#f59e0b,color:#fef3c7
+    classDef out  fill:#3b0764,stroke:#a855f7,color:#f3e8ff,stroke-width:2px
+
+    subgraph SAMP["Per-arm sample (S = seeds in manifest)"]
+      direction LR
+      S1["game(arm, seed=1)<br/>finalEscalation = e₁<br/>casualties = c₁,..."]:::game
+      S2["game(arm, seed=2)<br/>finalEscalation = e₂"]:::game
+      Sd["⋮"]:::game
+      Sn["game(arm, seed=S)<br/>finalEscalation = e_S"]:::game
+    end
+
+    subgraph DIST["Per-arm metric distributions"]
+      direction TB
+      D1["finalEscalation histogram<br/>(bins 0..10)"]:::bin
+      D2["meanEscalationByTurn"]:::bin
+      D3["outcomeKind freq · capability-citation freq"]:::bin
+      D4["per-faction will / readiness / casualties<br/>(n, mean, std, p25/p50/p75, min/max)"]:::bin
+    end
+
+    BOOT["Bootstrap (2000 × resample-with-replacement)<br/>Δ = mean(arm) − mean(baseline)<br/>→ 95% CI on Δ"]:::boot
+
+    REPORT["CampaignReport.arms[i].vsBaseline<br/>{ finalEscalationDelta, politicalWillDeltaByFaction,<br/>casualtiesDeltaByFaction } each with mean + ci95"]:::out
+
+    SAMP --> DIST
+    DIST --> BOOT
+    BOOT --> REPORT

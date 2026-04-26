@@ -1,16 +1,17 @@
 /**
  * Bottom-left stats panel.
  *
- * The two charts intentionally show the *master* metrics from the engine,
- * not arbitrary per-faction signals:
+ * The two charts intentionally show the *master* environmental metrics
+ * from the engine, not arbitrary per-faction signals:
  *
  *   1. Escalation Ladder - escalationLevel (0..10) over time, the single
  *      number that tells you whether the strategy avoided or triggered
  *      kinetic conflict. Threshold guides at 3 (limited) / 6 (broad).
  *
- *   2. Cumulative Casualties - per-faction casualty totals, ramped from
- *      STATE_SNAPSHOT.factions[*].casualties. This is the bottom-line
- *      cost metric and changes meaningfully across the demo.
+ *   2. Regional Tension - avgTension (0..10) over time, the mean
+ *      tensionLevel across the scenario's regions. This is the broader
+ *      "operating environment" signal: it captures pressure across the
+ *      theater rather than just kinetic escalation.
  *
  * In compare mode the baseline series renders dashed/faded, the fork
  * series renders solid/full-strength.
@@ -24,7 +25,6 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
   ReferenceLine,
   CartesianGrid,
 } from 'recharts';
@@ -52,14 +52,10 @@ interface EscRow {
   fork?: number;
 }
 
-interface CasualtyRow {
+interface TensionRow {
   turn: string;
-  USA?: number;
-  PRC?: number;
-  ROC?: number;
-  USA_F?: number;
-  PRC_F?: number;
-  ROC_F?: number;
+  base?: number;
+  fork?: number;
 }
 
 function unionTurns(
@@ -87,21 +83,17 @@ function buildEscalationRows(
   });
 }
 
-function buildCasualtyRows(
+function buildTensionRows(
   baseline: UiHistoricalStat[],
   fork: UiHistoricalStat[] | null,
-): CasualtyRow[] {
+): TensionRow[] {
   return unionTurns(baseline, fork).map((t) => {
     const b = baseline.find((s) => s.turn === t);
     const f = fork?.find((s) => s.turn === t);
     return {
       turn: `T${t}`,
-      USA: b?.USA_casualties,
-      PRC: b?.PRC_casualties,
-      ROC: b?.ROC_casualties,
-      USA_F: f?.USA_casualties,
-      PRC_F: f?.PRC_casualties,
-      ROC_F: f?.ROC_casualties,
+      base: b?.avgTension,
+      fork: f?.avgTension,
     };
   });
 }
@@ -111,13 +103,18 @@ export function StatsPanel({ baseline, fork }: Props) {
     baseline.historicalStats,
     fork?.historicalStats ?? null,
   );
-  const casRows = buildCasualtyRows(
+  const tensionRows = buildTensionRows(
     baseline.historicalStats,
     fork?.historicalStats ?? null,
   );
 
   const baselineEsc = baseline.escalationLevel ?? 0;
   const forkEsc = fork?.escalationLevel ?? null;
+
+  const lastBaselineTension =
+    baseline.historicalStats[baseline.historicalStats.length - 1]?.avgTension ?? 0;
+  const lastForkTension =
+    fork?.historicalStats[fork.historicalStats.length - 1]?.avgTension ?? null;
 
   return (
     <>
@@ -148,10 +145,47 @@ export function StatsPanel({ baseline, fork }: Props) {
           forkEsc={forkEsc}
           hasFork={!!fork}
         />
-        <CasualtyChart rows={casRows} hasFork={!!fork} />
+        <TensionChart
+          rows={tensionRows}
+          baselineTension={lastBaselineTension}
+          forkTension={lastForkTension}
+          hasFork={!!fork}
+        />
       </div>
     </>
   );
+}
+
+const ESCALATION_THRESHOLD = 3;
+
+type EscalationStatus = 'normal' | 'red' | 'green';
+
+function computeEscalationStatus(
+  rows: EscRow[],
+  hasFork: boolean,
+  forkEsc: number | null,
+): EscalationStatus {
+  const baselineCrossed = rows.some(
+    (r) => (r.base ?? 0) > ESCALATION_THRESHOLD,
+  );
+  const forkCrossed = rows.some(
+    (r) => (r.fork ?? 0) > ESCALATION_THRESHOLD,
+  );
+
+  // Once a fork is in flight and finishes below the alert threshold without
+  // ever crossing it, treat the situation as "resolved" - the strategist's
+  // alternative path averted the escalation.
+  if (
+    hasFork &&
+    forkEsc !== null &&
+    forkEsc <= ESCALATION_THRESHOLD &&
+    !forkCrossed
+  ) {
+    return 'green';
+  }
+
+  if (baselineCrossed || forkCrossed) return 'red';
+  return 'normal';
 }
 
 function EscalationChart({
@@ -176,8 +210,39 @@ function EscalationChart({
     ),
   );
 
+  const status = computeEscalationStatus(rows, hasFork, forkEsc);
+  const statusBorder =
+    status === 'red'
+      ? '1px solid rgba(239,68,68,0.55)'
+      : status === 'green'
+        ? '1px solid rgba(34,197,94,0.55)'
+        : '1px solid transparent';
+  const statusBg =
+    status === 'red'
+      ? 'rgba(239,68,68,0.06)'
+      : status === 'green'
+        ? 'rgba(34,197,94,0.06)'
+        : 'transparent';
+  const statusLabelColor =
+    status === 'red'
+      ? '#ef4444'
+      : status === 'green'
+        ? '#22c55e'
+        : 'var(--text-secondary)';
+
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        border: statusBorder,
+        background: statusBg,
+        borderRadius: 4,
+        transition: 'border-color 0.4s ease, background 0.4s ease',
+      }}
+    >
       <div
         style={{
           display: 'flex',
@@ -191,11 +256,34 @@ function EscalationChart({
           style={{
             fontSize: 9,
             letterSpacing: '0.18em',
-            color: 'var(--text-secondary)',
+            color: statusLabelColor,
             textTransform: 'uppercase',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            transition: 'color 0.4s ease',
           }}
         >
           ESCALATION LADDER (0–10)
+          {status === 'green' && (
+            <svg
+              viewBox="0 0 16 16"
+              width="11"
+              height="11"
+              aria-hidden="true"
+              style={{ display: 'inline-block' }}
+            >
+              <circle cx="8" cy="8" r="7" fill="rgba(34,197,94,0.18)" stroke="#22c55e" strokeWidth="1.2" />
+              <path
+                d="M4.5 8.2 L7 10.6 L11.5 5.6"
+                fill="none"
+                stroke="#22c55e"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
         </span>
         <span style={{ fontSize: 11, color: '#e2e8f0' }}>
           <span style={{ color: '#7dd3fc' }}>{baselineEsc.toFixed(0)}</span>
@@ -277,99 +365,98 @@ function EscalationChart({
   );
 }
 
-function CasualtyChart({ rows, hasFork }: { rows: CasualtyRow[]; hasFork: boolean }) {
+function TensionChart({
+  rows,
+  baselineTension,
+  forkTension,
+  hasFork,
+}: {
+  rows: TensionRow[];
+  baselineTension: number;
+  forkTension: number | null;
+  hasFork: boolean;
+}) {
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <span
+      <div
         style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
           padding: '2px 8px',
           fontFamily: 'var(--font-mono)',
-          fontSize: 9,
-          letterSpacing: '0.18em',
-          color: 'var(--text-secondary)',
-          textTransform: 'uppercase',
         }}
       >
-        CUMULATIVE CASUALTIES
-      </span>
+        <span
+          style={{
+            fontSize: 9,
+            letterSpacing: '0.18em',
+            color: 'var(--text-secondary)',
+            textTransform: 'uppercase',
+          }}
+        >
+          REGIONAL TENSION (0–10)
+        </span>
+        <span style={{ fontSize: 11, color: '#e2e8f0' }}>
+          <span style={{ color: '#7dd3fc' }}>{baselineTension.toFixed(1)}</span>
+          {hasFork && forkTension !== null && (
+            <>
+              <span style={{ color: '#475569', margin: '0 4px' }}>|</span>
+              <span style={{ color: '#fbbf24' }}>{forkTension.toFixed(1)}</span>
+            </>
+          )}
+        </span>
+      </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={rows} margin={{ top: 6, right: 8, left: -18, bottom: 0 }}>
+          <ComposedChart data={rows} margin={{ top: 4, right: 12, left: -18, bottom: 0 }}>
             <CartesianGrid strokeDasharray="2 4" stroke="rgba(148,163,184,0.08)" vertical={false} />
             <XAxis dataKey="turn" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
             <YAxis
+              domain={[0, 10]}
               tick={AXIS_STYLE}
               axisLine={false}
               tickLine={false}
-              tickCount={4}
-              allowDecimals={false}
+              tickCount={6}
             />
             <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={{ color: '#64748b', fontSize: 10 }} />
-            <Legend
-              iconType="plainline"
-              iconSize={14}
-              wrapperStyle={{ fontFamily: 'var(--font-mono)', fontSize: 9, paddingTop: 0 }}
+            <ReferenceLine
+              y={5}
+              stroke="rgba(148,163,184,0.25)"
+              strokeDasharray="2 4"
+              label={{
+                value: 'baseline',
+                position: 'right',
+                fill: '#94a3b8',
+                fontSize: 8,
+                fontFamily: 'var(--font-mono)',
+              }}
             />
-            <Line
+            <Area
               type="monotone"
-              dataKey="USA"
-              stroke="#3b82f6"
-              strokeWidth={1.8}
+              dataKey="base"
+              name="baseline"
+              stroke="#7dd3fc"
+              fill="#0ea5e9"
+              fillOpacity={hasFork ? 0.08 : 0.18}
+              strokeWidth={hasFork ? 1.6 : 2.2}
               strokeDasharray={hasFork ? '4 3' : undefined}
-              strokeOpacity={hasFork ? 0.55 : 1}
-              dot={false}
-              isAnimationActive={false}
-            />
-            <Line
-              type="monotone"
-              dataKey="PRC"
-              stroke="#ef4444"
-              strokeWidth={1.8}
-              strokeDasharray={hasFork ? '4 3' : undefined}
-              strokeOpacity={hasFork ? 0.55 : 1}
-              dot={false}
-              isAnimationActive={false}
-            />
-            <Line
-              type="monotone"
-              dataKey="ROC"
-              stroke="#22c55e"
-              strokeWidth={1.8}
-              strokeDasharray={hasFork ? '4 3' : undefined}
-              strokeOpacity={hasFork ? 0.55 : 1}
-              dot={false}
+              strokeOpacity={hasFork ? 0.7 : 1}
+              dot={{ r: 2, fill: '#7dd3fc' }}
+              activeDot={{ r: 4 }}
               isAnimationActive={false}
             />
             {hasFork && (
-              <>
-                <Line
-                  type="monotone"
-                  dataKey="USA_F"
-                  name="USA fork"
-                  stroke="#3b82f6"
-                  strokeWidth={2.2}
-                  dot={{ r: 2 }}
-                  isAnimationActive={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="PRC_F"
-                  name="PRC fork"
-                  stroke="#ef4444"
-                  strokeWidth={2.2}
-                  dot={{ r: 2 }}
-                  isAnimationActive={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="ROC_F"
-                  name="ROC fork"
-                  stroke="#22c55e"
-                  strokeWidth={2.2}
-                  dot={{ r: 2 }}
-                  isAnimationActive={false}
-                />
-              </>
+              <Line
+                type="monotone"
+                dataKey="fork"
+                name="fork"
+                stroke="#fbbf24"
+                strokeWidth={2.4}
+                dot={{ r: 2.5, fill: '#fbbf24' }}
+                activeDot={{ r: 4 }}
+                isAnimationActive={false}
+              />
             )}
           </ComposedChart>
         </ResponsiveContainer>

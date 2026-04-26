@@ -1,0 +1,38 @@
+%%{init: {'theme':'dark', 'flowchart': {'curve':'basis', 'htmlLabels': false, 'nodeSpacing': 30, 'rankSpacing': 50}}}%%
+flowchart LR
+    classDef snap fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
+    classDef ev   fill:#1e293b,stroke:#64748b,color:#e2e8f0
+    classDef base fill:#172554,stroke:#3b82f6,color:#dbeafe
+    classDef fork fill:#422006,stroke:#f59e0b,color:#fef3c7
+    classDef ovr  fill:#3b0764,stroke:#a855f7,color:#f3e8ff
+
+    B0["state @ T0"]:::snap
+    B1["state @ T1"]:::snap
+    B2["state @ T2"]:::snap
+    B3["state @ T3"]:::snap
+    B4["state @ T4"]:::snap
+
+    B0 -- "turn 1<br/>(baseline)" --> B1
+    B1 -- "turn 2" --> B2
+    B2 -- "turn 3" --> B3
+    B3 -- "turn 4" --> B4
+
+    OVR["FORK_FROM<br/>fromTurn=2<br/>override = force-actions<br/>(USA pre-emptive strike)"]:::ovr
+    B2 -. "snapshot copy" .-> F2
+    OVR --> F2
+
+    F2["state @ T2'"]:::fork
+    F3["state @ T3'"]:::fork
+    F4["state @ T4'"]:::fork
+
+    F2 -- "turn 3 (replay,<br/>same seed)" --> F3
+    F3 -- "turn 4" --> F4
+
+    BASE["events.jsonl<br/>(baseline)"]:::base
+    FORKLOG["events.jsonl<br/>(fork)"]:::fork
+
+    B4 --> BASE
+    F4 --> FORKLOG
+
+    BASE -- "side-by-side<br/>compare in UI" --> CMP["UI replay:<br/>baseline ↔ fork"]:::ev
+    FORKLOG --> CMP

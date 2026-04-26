@@ -1,7 +1,7 @@
 {
   "id": "taiwan-2026",
   "name": "Taiwan Strait 2026",
-  "description": "A fictional 2026 US-China crisis over Taiwan, distilled from the LLMWargaming Taiwan Strait scenario (https://arxiv.org/abs/2403.03407). Three factions (USA, ROC/Taiwan, PRC) take pre-scripted actions while the adjudicator resolves escalation outcomes.",
+  "description": "A fictional 2026 US-China crisis over Taiwan, distilled from the LLMWargaming Taiwan Strait scenario (https://arxiv.org/abs/2403.03407). Three factions (USA, ROC/Taiwan, PRC) act autonomously through LLM player agents while the adjudicator resolves stochastic outcomes.",
   "factions": [
     {
       "id": "USA",
@@ -82,5 +82,76 @@
     "June 2026: US increases air and sea patrols and reinforces northern Philippines.",
     "June 2026: PRC MFA warns US is 'playing with fire'; PLAN/CCG/maritime militia shadow the 5th CSG."
   ],
-  "turnCount": 4
+  "turnCount": 4,
+  "capabilities": [
+    { "id": "csg", "name": "Carrier Strike Groups (USA)", "faction": "USA", "description": "Nimitz/Ford-class carrier strike groups deployable to the Western Pacific.", "unit": "groups" },
+    { "id": "ssn-pacific", "name": "SSN attack submarines (USA, Pacific)", "faction": "USA", "description": "Virginia/LA-class fast attack submarines forward-deployed in the Pacific.", "unit": "platforms" },
+    { "id": "f35-deployed", "name": "F-35 fighters (USA, deployed)", "faction": "USA", "description": "USAF/USMC F-35 squadrons deployed to Indo-Pacific bases.", "unit": "squadrons" },
+    { "id": "ddg", "name": "Aegis DDGs (USA, Pacific)", "faction": "USA", "description": "Arleigh Burke-class destroyers in the western Pacific.", "unit": "platforms" },
+    { "id": "lr-strike", "name": "Long-range strike (USA, theater)", "faction": "USA", "description": "Tomahawk, JASSM-ER, AGM-158C and B-1/B-2/B-21 reach in theater.", "unit": "platforms" },
+    { "id": "us-cyber-teams", "name": "Offensive cyber teams (USA)", "faction": "USA", "description": "USCYBERCOM Cyber Mission Force teams allocated to Indo-Pacific.", "unit": "teams" },
+    { "id": "us-isr", "name": "ISR / EW (USA, theater)", "faction": "USA", "description": "RC-135, P-8, MQ-9, EA-18G assets for theater ISR and EW.", "unit": "platforms" },
+
+    { "id": "df-launchers", "name": "DF-series launchers (PRC)", "faction": "PRC", "description": "DF-17, DF-21D, DF-26 mobile launchers under PLA Rocket Force.", "unit": "platforms" },
+    { "id": "ssbn", "name": "SSBN strategic submarines (PRC)", "faction": "PRC", "description": "Type 094 strategic submarines on patrol.", "unit": "platforms" },
+    { "id": "plaaf-fighters", "name": "PLAAF 4th/5th-gen fighters (PRC)", "faction": "PRC", "description": "J-20, J-16, J-10 squadrons in eastern theater command.", "unit": "squadrons" },
+    { "id": "plan-surface", "name": "PLAN surface combatants (PRC)", "faction": "PRC", "description": "Type 055/052D destroyers and frigates active in the Strait.", "unit": "platforms" },
+    { "id": "ccg-vessels", "name": "China Coast Guard + maritime militia (PRC)", "faction": "PRC", "description": "CCG cutters and maritime militia vessels shadowing US CSG.", "unit": "platforms" },
+    { "id": "prc-cyber-teams", "name": "Offensive cyber teams (PRC)", "faction": "PRC", "description": "PLA Strategic Support Force cyber units allocated to Taiwan crisis.", "unit": "teams" },
+
+    { "id": "lr-anti-ship", "name": "Long-range anti-ship (ROC)", "faction": "ROC", "description": "Hsiung Feng III, US-supplied Harpoon coastal defence batteries.", "unit": "battalions" },
+    { "id": "anti-air", "name": "Air and missile defence (ROC)", "faction": "ROC", "description": "Patriot, Sky Bow, Stinger units across the island.", "unit": "battalions" },
+    { "id": "c3-systems", "name": "C3 / integrated air picture (ROC)", "faction": "ROC", "description": "US-supplied C3 nodes integrating Taiwan's combat systems.", "unit": "groups" },
+    { "id": "roc-fighters", "name": "ROC air force fighters", "faction": "ROC", "description": "F-16V, IDF, Mirage 2000 squadrons.", "unit": "squadrons" },
+    { "id": "roc-reservists", "name": "ROC reservists / civil defence", "faction": "ROC", "description": "Activated reserve battalions plus civil defence brigades.", "unit": "battalions" }
+  ],
+  "initialForces": {
+    "USA": {
+      "csg":           { "quantity": 2, "posture": "forward",  "readiness": 90 },
+      "ssn-pacific":   { "quantity": 8, "posture": "forward",  "readiness": 80 },
+      "f35-deployed":  { "quantity": 6, "posture": "forward",  "readiness": 85 },
+      "ddg":           { "quantity": 12,"posture": "forward",  "readiness": 88 },
+      "lr-strike":     { "quantity": 60,"posture": "garrison", "readiness": 75 },
+      "us-cyber-teams":{ "quantity": 4, "posture": "garrison", "readiness": 90 },
+      "us-isr":        { "quantity": 16,"posture": "forward",  "readiness": 85 }
+    },
+    "PRC": {
+      "df-launchers":   { "quantity": 80,"posture": "forward",  "readiness": 85 },
+      "ssbn":           { "quantity": 4, "posture": "garrison", "readiness": 80 },
+      "plaaf-fighters": { "quantity": 12,"posture": "forward",  "readiness": 80 },
+      "plan-surface":   { "quantity": 24,"posture": "forward",  "readiness": 80 },
+      "ccg-vessels":    { "quantity": 60,"posture": "engaged",  "readiness": 70 },
+      "prc-cyber-teams":{ "quantity": 6, "posture": "garrison", "readiness": 85 }
+    },
+    "ROC": {
+      "lr-anti-ship": { "quantity": 6,  "posture": "garrison", "readiness": 80 },
+      "anti-air":     { "quantity": 12, "posture": "garrison", "readiness": 80 },
+      "c3-systems":   { "quantity": 3,  "posture": "garrison", "readiness": 70 },
+      "roc-fighters": { "quantity": 8,  "posture": "garrison", "readiness": 75 },
+      "roc-reservists":{ "quantity": 20, "posture": "garrison", "readiness": 50 }
+    }
+  },
+  "actionKinds": [
+    "military-deter",
+    "military-defend",
+    "military-strike",
+    "diplomatic",
+    "economic",
+    "cyber",
+    "info-ops",
+    "clandestine",
+    "mobilisation"
+  ],
+  "outcomeKinds": [
+    "de-escalation",
+    "diplomatic-resolution",
+    "status-quo",
+    "limited-incident",
+    "kinetic-exchange",
+    "broad-escalation",
+    "cyber-incident",
+    "economic-shock",
+    "ally-mobilisation",
+    "domestic-pressure"
+  ]
 }

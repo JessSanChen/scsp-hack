@@ -1,12 +1,8 @@
 /**
- * Loads a scenario from `scenarios/<name>/`.
+ * Loads a scenario from `scenarios/<name>/scenario.json`.
  *
- * Each scenario is two files:
- *  - `scenario.json`  static config (factions, regions, initial timeline)
- *  - `actions.json`   pre-scripted player actions per turn (demo stand-in)
- *
- * Loader is deliberately strict: any malformed/missing field throws so
- * scenario authors get a clear error at game-start time rather than mid-turn.
+ * Strict schema: any malformed/missing field throws at load time so
+ * authors get a clear error before a game starts.
  */
 
 import { promises as fs } from "node:fs";
@@ -31,11 +27,18 @@ const RegionSchema = z.object({
   initialControl: z.string().nullable().optional(),
 });
 
-const ActionSchema = z.object({
+const CapabilitySchema = z.object({
   id: z.string().min(1),
+  name: z.string().min(1),
   faction: z.string().min(1),
-  summary: z.string().min(1),
-  details: z.string().optional(),
+  description: z.string().min(1),
+  unit: z.string().min(1),
+});
+
+const ForceLevelSchema = z.object({
+  quantity: z.number().nonnegative(),
+  posture: z.enum(["garrison", "forward", "engaged", "attrited"]),
+  readiness: z.number().min(0).max(100),
 });
 
 const ScenarioFileSchema = z.object({
@@ -46,19 +49,12 @@ const ScenarioFileSchema = z.object({
   regions: z.array(RegionSchema).min(1),
   initialTimeline: z.array(z.string()).min(1),
   turnCount: z.number().int().positive(),
+  capabilities: z.array(CapabilitySchema).min(1),
+  initialForces: z.record(z.string(), z.record(z.string(), ForceLevelSchema)),
+  actionKinds: z.array(z.string()).min(1),
+  outcomeKinds: z.array(z.string()).min(1),
 });
 
-const ScriptedTurnSchema = z.object({
-  turn: z.number().int().positive(),
-  narrative: z.string().optional(),
-  actions: z.record(z.string(), z.array(ActionSchema).min(1)),
-});
-
-const ActionsFileSchema = z.object({
-  scriptedTurns: z.array(ScriptedTurnSchema).min(1),
-});
-
-/** Resolve a scenario by name from the bundled `scenarios/` directory. */
 export function resolveScenarioDir(name: string, scenarioRoot?: string): string {
   const root = scenarioRoot ?? path.resolve(process.cwd(), "scenarios");
   return path.join(root, name);
@@ -66,26 +62,13 @@ export function resolveScenarioDir(name: string, scenarioRoot?: string): string 
 
 export async function loadScenario(name: string, scenarioRoot?: string): Promise<Scenario> {
   const dir = resolveScenarioDir(name, scenarioRoot);
-  const [scenarioRaw, actionsRaw] = await Promise.all([
-    fs.readFile(path.join(dir, "scenario.json"), "utf8"),
-    fs.readFile(path.join(dir, "actions.json"), "utf8"),
-  ]);
-  const parsedScenario = ScenarioFileSchema.parse(JSON.parse(scenarioRaw));
-  const parsedActions = ActionsFileSchema.parse(JSON.parse(actionsRaw));
+  const scenarioRaw = await fs.readFile(path.join(dir, "scenario.json"), "utf8");
+  const parsed = ScenarioFileSchema.parse(JSON.parse(scenarioRaw));
 
-  const factionIds = new Set(parsedScenario.factions.map((f) => f.id));
+  const factionIds = new Set(parsed.factions.map((f) => f.id));
+  const capabilityIds = new Set(parsed.capabilities.map((c) => c.id));
 
-  for (const turn of parsedActions.scriptedTurns) {
-    for (const factionId of Object.keys(turn.actions)) {
-      if (!factionIds.has(factionId)) {
-        throw new Error(
-          `Scenario '${name}' turn ${turn.turn} references unknown faction '${factionId}'`,
-        );
-      }
-    }
-  }
-
-  for (const region of parsedScenario.regions) {
+  for (const region of parsed.regions) {
     for (const f of region.initialPresence) {
       if (!factionIds.has(f)) {
         throw new Error(
@@ -100,15 +83,37 @@ export async function loadScenario(name: string, scenarioRoot?: string): Promise
     }
   }
 
+  for (const cap of parsed.capabilities) {
+    if (!factionIds.has(cap.faction)) {
+      throw new Error(
+        `Scenario '${name}' capability '${cap.id}' references unknown faction '${cap.faction}'`,
+      );
+    }
+  }
+
+  for (const [factionId, forces] of Object.entries(parsed.initialForces)) {
+    if (!factionIds.has(factionId)) {
+      throw new Error(
+        `Scenario '${name}' initialForces references unknown faction '${factionId}'`,
+      );
+    }
+    for (const capId of Object.keys(forces)) {
+      if (!capabilityIds.has(capId)) {
+        throw new Error(
+          `Scenario '${name}' initialForces['${factionId}'] references unknown capability '${capId}'`,
+        );
+      }
+    }
+  }
+
   return {
-    ...parsedScenario,
-    regions: parsedScenario.regions.map((r) => ({
+    ...parsed,
+    regions: parsed.regions.map((r) => ({
       id: r.id,
       name: r.name,
       description: r.description,
       initialPresence: r.initialPresence,
       initialControl: r.initialControl ?? undefined,
     })),
-    scriptedTurns: parsedActions.scriptedTurns,
   };
 }

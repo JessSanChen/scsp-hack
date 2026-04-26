@@ -1,9 +1,11 @@
 /**
  * The adjudicator agent. Wraps the LLM layer, prompt builders, and zod
- * schema validation behind two simple async methods used by the engine.
+ * schema validation behind a single async method used by the engine.
  *
  * The agent never mutates world state directly; it returns a parsed
- * `CandidateGenerationOutput` for the engine to apply.
+ * `CandidateGenerationOutput` which the engine applies via
+ * `applyDelta`. The autonomous-agent build runs exactly one
+ * candidate-generation call per turn (no human-in-the-loop pass).
  */
 
 import {
@@ -19,12 +21,9 @@ import {
 import type { LlmClient, LlmResponse } from "../llm/types.js";
 import type { OutcomeCandidate } from "../engine/state.js";
 
-export type AdjudicatorPhase = "primary" | "post-escalation";
-
 export interface AdjudicatorRunResult {
   output: CandidateGenerationOutput;
   trace: {
-    phase: AdjudicatorPhase;
     request: { system: string; user: string; mockContext: Record<string, unknown> };
     response: unknown;
     mock: boolean;
@@ -35,26 +34,46 @@ export interface AdjudicatorRunResult {
 export async function generateCandidates(
   client: LlmClient,
   input: CandidateGenInput,
-  phase: AdjudicatorPhase = "primary",
 ): Promise<AdjudicatorRunResult> {
   const user = buildCandidateGenUserPrompt(input);
   const factionIds = input.scenario.factions.map((f) => f.id);
   const regionIds = input.scenario.regions.map((r) => r.id);
+  const capabilityIds = input.scenario.capabilities.map((c) => c.id);
+  const outcomeKindIds = input.scenario.outcomeKinds;
   const actionSummaries: Record<string, string[]> = {};
+  const actionCapabilities: Record<string, string[]> = {};
   for (const [k, v] of Object.entries(input.actions)) {
     actionSummaries[k] = v.map((a) => a.summary);
+    actionCapabilities[k] = Array.from(
+      new Set(v.flatMap((a) => a.capabilitiesUsed)),
+    );
+  }
+  const factionForcesFingerprint: Record<string, string> = {};
+  for (const fid of factionIds) {
+    const factionState = input.state.factions[fid];
+    if (!factionState) continue;
+    const parts = Object.keys(factionState.forces)
+      .sort()
+      .map((k) => {
+        const f = factionState.forces[k];
+        return `${k}:q${f.quantity}:r${f.readiness.toFixed(2)}:p${f.posture}`;
+      });
+    factionForcesFingerprint[fid] = parts.join("|");
   }
   const mockContext = {
     turn: input.turn,
     factionIds,
     regionIds,
+    capabilityIds,
+    outcomeKindIds,
     actionSummaries,
-    postEscalation: phase === "post-escalation",
-    humanGuidance: input.humanGuidance,
+    actionCapabilities,
+    escalationLevel: input.state.escalationLevel,
+    factionForcesFingerprint,
   };
   const llmResp: LlmResponse<CandidateGenerationOutput> = await client.complete(
     {
-      call: phase === "primary" ? "candidate-gen" : "post-escalation",
+      call: "candidate-gen",
       system: ADJUDICATOR_SYSTEM_PROMPT,
       user,
       jsonSchema: candidateGenerationJsonSchema as unknown as {
@@ -77,32 +96,36 @@ export async function generateCandidates(
     confidence: c.confidence,
     stateDelta: {
       narrativeAppend: c.stateDelta.narrativeAppend,
+      ...(c.stateDelta.escalationLevelDelta !== null
+        ? { escalationLevelDelta: c.stateDelta.escalationLevelDelta }
+        : {}),
       factionPatches: c.stateDelta.factionPatches.map((p) => ({
         factionId: p.factionId,
-        ...(p.politicalWillDelta !== null
-          ? { politicalWillDelta: p.politicalWillDelta }
-          : {}),
+        ...(p.politicalWillDelta !== null ? { politicalWillDelta: p.politicalWillDelta } : {}),
         ...(p.forceReadinessDelta !== null
           ? { forceReadinessDelta: p.forceReadinessDelta }
           : {}),
-        ...(p.casualtiesDelta !== null
-          ? { casualtiesDelta: p.casualtiesDelta }
-          : {}),
+        ...(p.casualtiesDelta !== null ? { casualtiesDelta: p.casualtiesDelta } : {}),
         ...(p.postureSet !== null ? { postureSet: p.postureSet } : {}),
         statusFlagsAdd: p.statusFlagsAdd,
         statusFlagsRemove: p.statusFlagsRemove,
       })),
       regionPatches: c.stateDelta.regionPatches.map((p) => ({
         regionId: p.regionId,
-        ...(p.tensionLevelDelta !== null
-          ? { tensionLevelDelta: p.tensionLevelDelta }
-          : {}),
+        ...(p.tensionLevelDelta !== null ? { tensionLevelDelta: p.tensionLevelDelta } : {}),
         ...(p.setControllingFaction !== null
           ? { setControllingFaction: p.setControllingFaction }
           : {}),
         addPresentFactions: p.addPresentFactions,
         removePresentFactions: p.removePresentFactions,
         addIncidents: p.addIncidents,
+      })),
+      forcePatches: c.stateDelta.forcePatches.map((p) => ({
+        factionId: p.factionId,
+        capabilityId: p.capabilityId,
+        ...(p.quantityDelta !== null ? { quantityDelta: p.quantityDelta } : {}),
+        ...(p.postureSet !== null ? { postureSet: p.postureSet } : {}),
+        ...(p.readinessDelta !== null ? { readinessDelta: p.readinessDelta } : {}),
       })),
       knowledgeAdditions: c.stateDelta.knowledgeAdditions.map((k) => {
         if (k.scope === "common") {
@@ -124,13 +147,14 @@ export async function generateCandidates(
       }),
     },
     visibility: Object.fromEntries(c.visibility.map((v) => [v.faction, v.level])),
+    outcomeKinds: c.outcomeKinds,
+    capabilityCitations: c.capabilityCitations,
     ...(c.flagsExternalActor ? { flagsExternalActor: c.flagsExternalActor } : {}),
   }));
 
   return {
     output: llmResp.parsed,
     trace: {
-      phase,
       request: { system: ADJUDICATOR_SYSTEM_PROMPT, user, mockContext },
       response: llmResp.raw,
       mock: llmResp.mock,

@@ -35,6 +35,16 @@ const RegionPatchSchema = z
   })
   .strict();
 
+const ForcePatchSchema = z
+  .object({
+    factionId: z.string().min(1),
+    capabilityId: z.string().min(1),
+    quantityDelta: z.number().nullable(),
+    postureSet: z.enum(["garrison", "forward", "engaged", "attrited"]).nullable(),
+    readinessDelta: z.number().nullable(),
+  })
+  .strict();
+
 const KnowledgeAdditionSchema = z
   .object({
     scope: z.enum(["common", "secret"]),
@@ -47,8 +57,10 @@ const KnowledgeAdditionSchema = z
 const StateDeltaSchema = z
   .object({
     narrativeAppend: z.string().min(1),
+    escalationLevelDelta: z.number().nullable(),
     factionPatches: z.array(FactionPatchSchema),
     regionPatches: z.array(RegionPatchSchema),
+    forcePatches: z.array(ForcePatchSchema),
     knowledgeAdditions: z.array(KnowledgeAdditionSchema),
   })
   .strict();
@@ -70,6 +82,8 @@ const CandidateSchema = z
     confidence: z.number().min(0).max(1),
     stateDelta: StateDeltaSchema,
     visibility: z.array(VisibilityEntrySchema),
+    outcomeKinds: z.array(z.string()),
+    capabilityCitations: z.array(z.string()),
     flagsExternalActor: z.string().nullable(),
   })
   .strict();
@@ -122,6 +136,8 @@ export const candidateGenerationJsonSchema = {
             "confidence",
             "stateDelta",
             "visibility",
+            "outcomeKinds",
+            "capabilityCitations",
             "flagsExternalActor",
           ],
           properties: {
@@ -140,17 +156,36 @@ export const candidateGenerationJsonSchema = {
               description:
                 "Name of an actor outside the modelled factions (e.g. 'Japan', 'Russia') whose reaction this branch hinges on, or null.",
             },
+            outcomeKinds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "One or more tags drawn from scenario.outcomeKinds, e.g. 'kinetic-exchange', 'de-escalation'.",
+            },
+            capabilityCitations: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Capability ids that materially affected this outcome (used for capability-effect mining across Monte Carlo).",
+            },
             stateDelta: {
               type: "object",
               additionalProperties: false,
               required: [
                 "narrativeAppend",
+                "escalationLevelDelta",
                 "factionPatches",
                 "regionPatches",
+                "forcePatches",
                 "knowledgeAdditions",
               ],
               properties: {
                 narrativeAppend: { type: "string" },
+                escalationLevelDelta: {
+                  type: ["number", "null"],
+                  description:
+                    "Increment / decrement to global escalationLevel (0..10). Typically -3..+3.",
+                },
                 factionPatches: {
                   type: "array",
                   items: {
@@ -211,6 +246,30 @@ export const candidateGenerationJsonSchema = {
                         type: "array",
                         items: { type: "string" },
                       },
+                    },
+                  },
+                },
+                forcePatches: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: [
+                      "factionId",
+                      "capabilityId",
+                      "quantityDelta",
+                      "postureSet",
+                      "readinessDelta",
+                    ],
+                    properties: {
+                      factionId: { type: "string" },
+                      capabilityId: { type: "string" },
+                      quantityDelta: { type: ["number", "null"] },
+                      postureSet: {
+                        type: ["string", "null"],
+                        enum: ["garrison", "forward", "engaged", "attrited", null],
+                      },
+                      readinessDelta: { type: ["number", "null"] },
                     },
                   },
                 },

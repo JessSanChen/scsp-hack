@@ -1,13 +1,10 @@
 /**
  * Prompt builders for the adjudicator agent.
  *
- * The adjudicator does two LLM calls per turn at most:
- *   1. Candidate generation (called "candidate-gen").
- *   2. Optional regeneration after a human escalation answer
- *      ("post-escalation").
- *
- * Both share the same system prompt and JSON schema; only the user
- * message differs.
+ * The adjudicator does a single LLM call per turn ("candidate-gen") to
+ * produce 2-4 typed outcome candidates with probabilities, state deltas,
+ * outcome-kind tags and capability citations. The capability citations
+ * and outcome kinds are what the Monte Carlo aggregator mines.
  */
 
 import type { Action, FactionId } from "../scenario/types.js";
@@ -15,47 +12,61 @@ import type { Scenario } from "../scenario/types.js";
 import type { WorldState } from "../engine/state.js";
 
 export const ADJUDICATOR_SYSTEM_PROMPT = `You are an expert wargame adjudicator simulating a US-China-Taiwan crisis.
-Your job is, given the current world state and the actions each faction took this turn:
+Given the current world state, each faction's order of battle, and the actions each faction took this turn, your job is to:
 
 1. Generate 2-4 plausible OUTCOME CANDIDATES, each with:
    - probability (0..1; the set should sum to roughly 1)
    - consequentiality (1=routine, 5=potentially war-defining)
    - confidence (0..1; how sure you are this branch is plausible at all)
    - rationale (why this branch could happen)
-   - a typed stateDelta (numeric deltas to politicalWill/forceReadiness/casualties,
-     posture text changes, region tension/incident updates, and knowledge
-     additions scoped 'common' or 'secret' to a single faction)
+   - a typed stateDelta with:
+       narrativeAppend (1-2 sentences),
+       escalationLevelDelta (typically -3..+3 to global escalationLevel 0..10),
+       factionPatches (deltas to politicalWill / forceReadiness / casualties / posture / flags),
+       regionPatches (tension, control, presence, incidents),
+       forcePatches (attrition, repositioning, readiness changes for specific capability slots),
+       knowledgeAdditions (scoped 'common' or 'secret' to a single faction)
    - per-faction visibility (full | partial | none) into the outcome itself
-   - flagsExternalActor: name a non-modelled actor (e.g. Japan, Russia, EU, North Korea)
+   - outcomeKinds: 1-3 tags drawn from the scenario's outcome-kind vocabulary
+   - capabilityCitations: capability ids that materially shaped this outcome
+     (used to mine "which capabilities most often appear in branches that
+     lead to X?" across Monte Carlo campaigns - cite anything that mattered)
+   - flagsExternalActor: name a non-modelled actor (Japan, Russia, EU, North Korea, etc.)
      ONLY if this branch's plausibility hinges on their reaction; otherwise null
 
-2. Cover a meaningful spread: include at least one de-escalation branch
-   and at least one materially worse branch when the situation warrants.
+2. Cover a meaningful spread: include at least one de-escalation branch and at
+   least one materially worse branch when the situation warrants. Do not be
+   reflexively aggressive: account for both sides' incentives to avoid open war.
 
-3. Be strict about the JSON schema. faction ids and region ids must
-   exactly match the ones provided. statusFlagsAdd/Remove arrays must
-   exist (use [] when nothing). All numeric "*Delta" fields must be
-   numbers (positive or negative) or null - never strings.
+3. Be strict about the JSON schema. faction ids, region ids, capability ids
+   and outcome-kind tags must match exactly the ones provided. All array
+   fields must be present (use [] when nothing). All numeric "*Delta" fields
+   must be numbers or null - never strings.
 
-4. The world model is the source of truth. Your stateDelta is the ONLY
-   way state changes; do not narrate changes that do not appear in the
-   delta. The narrativeAppend should be 1-2 sentences.
+4. The world model is the source of truth. Your stateDelta is the ONLY way
+   state changes; do not narrate effects that do not appear in the delta.
+   Forces deplete or reposture only via forcePatches.
 
-5. Knowledge additions: 'common' is broadcast to all factions; 'secret'
-   requires a faction id and is held privately. Use secret for things
-   like clandestine operations, intelligence gains, internal reads.`;
+5. Knowledge additions: 'common' is broadcast to all factions; 'secret' requires
+   a faction id. Use secret for clandestine ops, intelligence gains, internal
+   reads. Communication degradation can be modelled by writing distorted
+   knowledge to the affected factions and accurate knowledge as 'secret' to
+   the originator.`;
 
 export interface CandidateGenInput {
   scenario: Scenario;
   state: WorldState;
   turn: number;
   actions: Record<FactionId, Action[]>;
-  /** Free-form human guidance from a prior escalation, if any. */
-  humanGuidance?: string;
+  /**
+   * Per-faction free-text rationale recorded by the player agents this
+   * turn. Helpful intent signal for the adjudicator.
+   */
+  playerRationales?: Record<FactionId, string>;
 }
 
 export function buildCandidateGenUserPrompt(input: CandidateGenInput): string {
-  const { scenario, state, turn, actions, humanGuidance } = input;
+  const { scenario, state, turn, actions, playerRationales } = input;
   const lines: string[] = [];
 
   lines.push(`# Scenario: ${scenario.name}`);
@@ -75,13 +86,33 @@ export function buildCandidateGenUserPrompt(input: CandidateGenInput): string {
   }
   lines.push("");
 
+  lines.push(`# Capabilities (use these ids exactly in capabilityCitations and forcePatches)`);
+  for (const c of scenario.capabilities) {
+    lines.push(`- ${c.id} [${c.faction}, ${c.unit}]: ${c.name} - ${c.description}`);
+  }
+  lines.push("");
+
+  lines.push(`# Outcome-kind vocabulary (use 1-3 of these in outcomeKinds)`);
+  lines.push(`  ${scenario.outcomeKinds.join(", ")}`);
+  lines.push("");
+
   lines.push(`# Current world state (after turn ${state.turn})`);
+  lines.push(`Global escalationLevel: ${state.escalationLevel} / 10`);
   lines.push("Faction state:");
   for (const [id, fs] of Object.entries(state.factions)) {
     lines.push(
       `  - ${id}: politicalWill=${fs.politicalWill} forceReadiness=${fs.forceReadiness} casualties=${fs.casualties} flags=[${fs.statusFlags.join(", ")}]`,
     );
     lines.push(`    posture: ${fs.posture}`);
+    const force = Object.entries(fs.forces);
+    if (force.length > 0) {
+      lines.push(`    forces:`);
+      for (const [capId, fl] of force) {
+        lines.push(
+          `      - ${capId}: qty=${fl.quantity} posture=${fl.posture} readiness=${fl.readiness}`,
+        );
+      }
+    }
   }
   lines.push("Region state:");
   for (const [id, rs] of Object.entries(state.regions)) {
@@ -108,77 +139,24 @@ export function buildCandidateGenUserPrompt(input: CandidateGenInput): string {
   lines.push(`# Actions submitted for turn ${turn}`);
   for (const factionId of Object.keys(actions)) {
     lines.push(`## ${factionId}`);
+    if (playerRationales?.[factionId]) {
+      lines.push(`Rationale: ${playerRationales[factionId]}`);
+    }
     for (const a of actions[factionId] ?? []) {
-      lines.push(`- ${a.summary}`);
+      const caps = a.capabilitiesUsed.length > 0 ? ` [uses: ${a.capabilitiesUsed.join(", ")}]` : "";
+      lines.push(`- (${a.kind}) ${a.summary}${caps}`);
       if (a.details) lines.push(`  Details: ${a.details}`);
     }
   }
   lines.push("");
 
-  if (humanGuidance) {
-    lines.push("# Human expert guidance (must be incorporated)");
-    lines.push(humanGuidance);
-    lines.push("");
-  }
-
   lines.push("# Your task");
   lines.push(
     `Generate 2-4 outcome candidates for turn ${turn}. Probabilities should sum to ~1. ` +
-      "Use only the faction and region ids declared above. Keep the narrativeAppend short (1-2 sentences). " +
-      "Set flagsExternalActor only if a non-modelled actor's reaction is decisive for that branch.",
+      "Use only the faction, region, capability, and outcome-kind ids declared above. " +
+      "Keep narrativeAppend to 1-2 sentences. Cite every capability that materially " +
+      "shapes the branch in capabilityCitations, even if you do not damage it via forcePatches.",
   );
 
   return lines.join("\n");
-}
-
-/**
- * The escalation question shown to the human. Self-contained so a future
- * UI can render it without re-deriving anything.
- */
-export function buildEscalationQuestion(input: {
-  turn: number;
-  state: WorldState;
-  actions: Record<FactionId, Action[]>;
-  reasons: string[];
-  candidates: { summary: string; probability: number; consequentiality: number }[];
-}): { question: string; stateSummary: string } {
-  const { turn, state, actions, reasons, candidates } = input;
-  const summary: string[] = [];
-  summary.push(`Turn ${turn} state summary:`);
-  for (const [id, fs] of Object.entries(state.factions)) {
-    summary.push(
-      `  ${id}: PW=${fs.politicalWill} FR=${fs.forceReadiness} cas=${fs.casualties} flags=[${fs.statusFlags.join(",")}]`,
-    );
-  }
-  summary.push("Tension levels:");
-  for (const [id, rs] of Object.entries(state.regions)) {
-    summary.push(`  ${id}: tension=${rs.tensionLevel}`);
-  }
-  const stateSummary = summary.join("\n");
-
-  const lines: string[] = [];
-  lines.push(`The adjudicator is escalating turn ${turn} for human review.`);
-  lines.push("");
-  lines.push("Reasons:");
-  for (const r of reasons) lines.push(`  - ${r}`);
-  lines.push("");
-  lines.push("Actions this turn:");
-  for (const factionId of Object.keys(actions)) {
-    lines.push(`  ${factionId}:`);
-    for (const a of actions[factionId] ?? []) lines.push(`    - ${a.summary}`);
-  }
-  lines.push("");
-  lines.push("Candidate outcomes the adjudicator generated:");
-  for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i]!;
-    lines.push(
-      `  ${i + 1}. [p=${c.probability.toFixed(2)} | conseq=${c.consequentiality}] ${c.summary}`,
-    );
-  }
-  lines.push("");
-  lines.push("Please respond with either:");
-  lines.push("  - Free-form guidance (e.g. 'Consider how Japan reacts to a US FONOP'),");
-  lines.push("    which will be added to the prompt for a regeneration.");
-  lines.push("  - A specific candidate id to force-select.");
-  return { question: lines.join("\n"), stateSummary };
 }

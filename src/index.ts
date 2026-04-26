@@ -2,8 +2,9 @@
  * Public API for the wargame adjudicator.
  *
  * Both the CLI in `src/cli/` and any future UI should call only these
- * exports. Internal modules under `engine/`, `adjudicator/`, `comms/`,
- * `llm/`, and `scenario/` are not part of the stable surface.
+ * exports. Internal modules under `engine/`, `adjudicator/`, `players/`,
+ * `comms/`, `llm/`, `scenario/`, `fork/`, `campaign/` are not part of
+ * the stable surface unless re-exported here.
  */
 
 import path from "node:path";
@@ -14,60 +15,55 @@ import { initialWorldState } from "./engine/state.js";
 import {
   appendEvent,
   loadTree,
-  readPending,
   writeStateSnapshot,
   type GameTree,
-  type PendingQuestion,
 } from "./engine/tree.js";
 import {
   readConfig,
-  resumeTurnAfterAnswer,
+  runGameToCompletion as engineRunToCompletion,
   runOneTurn,
   writeConfig,
   type GameConfigFile,
   type StepResult,
 } from "./engine/runGame.js";
-import { createOpenAiClient } from "./llm/openai.js";
-import { createMockClient } from "./llm/mock.js";
-import {
-  DEFAULT_HEURISTICS,
-  type HeuristicsConfig,
-} from "./adjudicator/heuristics.js";
-import type { LlmClient } from "./llm/types.js";
+import { makeClient } from "./llm/factory.js";
 
-export type { GameTree, PendingQuestion } from "./engine/tree.js";
+export type { GameTree } from "./engine/tree.js";
 export type { StepResult, GameConfigFile } from "./engine/runGame.js";
-export type { HeuristicsConfig } from "./adjudicator/heuristics.js";
-export type { Scenario, Faction, Action, FactionId } from "./scenario/types.js";
+export type {
+  Scenario,
+  Faction,
+  Action,
+  FactionId,
+  CapabilityId,
+  Capability,
+  ForceLevel,
+} from "./scenario/types.js";
 export type {
   WorldState,
   OutcomeCandidate,
-  EscalationRecord,
   TurnNode,
+  ForcePatch,
+  StateDelta,
 } from "./engine/state.js";
 export {
   getTurn,
   getAllCandidates,
   getSelectedCandidate,
   getCounterfactuals,
-  getEscalations,
   getBriefing,
 } from "./engine/tree.js";
 
 /* ---------- startGame ------------------------------------------------- */
 
 export interface StartGameOptions {
-  /** Scenario name under `scenarios/`, e.g. "taiwan-2026". */
   scenario: string;
-  /** Game directory to create / overwrite. */
   out: string;
   seed?: number;
-  heuristics?: Partial<HeuristicsConfig>;
   /** Use the deterministic mock LLM. Defaults to false. */
   useMock?: boolean;
   /** OpenAI model name (ignored when useMock=true). */
   llmModel?: string;
-  /** OpenAI API key override (ignored when useMock=true). */
   openAiApiKey?: string;
   /** Override scenarios root for tests. */
   scenarioRoot?: string;
@@ -85,10 +81,6 @@ export async function startGame(opts: StartGameOptions): Promise<GameHandle> {
   const scenario = await loadScenario(opts.scenario, opts.scenarioRoot);
   const seed = opts.seed ?? defaultSeed();
   const useMock = opts.useMock ?? false;
-  const heuristics: HeuristicsConfig = {
-    ...DEFAULT_HEURISTICS,
-    ...(opts.heuristics ?? {}),
-  };
 
   const gameDir = path.resolve(opts.out);
 
@@ -118,7 +110,6 @@ export async function startGame(opts: StartGameOptions): Promise<GameHandle> {
     seed,
     llmModel,
     useMock,
-    heuristics,
     createdAt: new Date().toISOString(),
   };
   await writeConfig(gameDir, config);
@@ -130,7 +121,6 @@ export async function startGame(opts: StartGameOptions): Promise<GameHandle> {
     kind: "GAME_STARTED",
     scenarioId: scenario.id,
     seed,
-    heuristics,
     llmModel,
     initialState,
   });
@@ -138,7 +128,7 @@ export async function startGame(opts: StartGameOptions): Promise<GameHandle> {
   return { gameDir, config, scenarioId: scenario.id };
 }
 
-/* ---------- stepGame -------------------------------------------------- */
+/* ---------- stepGame / runGameToCompletion --------------------------- */
 
 export interface StepGameOptions {
   /** Override mock/openai for this call. Defaults to config.useMock. */
@@ -157,34 +147,14 @@ export async function stepGame(
   return runOneTurn({ gameDir, scenario, client, config });
 }
 
-/* ---------- getPending ----------------------------------------------- */
-
-export async function getPending(gameDir: string): Promise<PendingQuestion | null> {
-  return readPending(gameDir);
-}
-
-/* ---------- answerEscalation ----------------------------------------- */
-
-export interface AnswerEscalationInput {
-  text?: string;
-  chooseCandidateId?: string;
-}
-
-export async function answerEscalation(
+export async function runGameToCompletion(
   gameDir: string,
-  answer: AnswerEscalationInput,
   options: StepGameOptions = {},
-): Promise<StepResult> {
+): Promise<{ finalTurn: number; turnsRun: number }> {
   const config = await readConfig(gameDir);
   const scenario = await loadScenario(config.scenarioId, options.scenarioRoot);
   const client = makeClient(config, options);
-  return resumeTurnAfterAnswer({
-    gameDir,
-    scenario,
-    client,
-    config,
-    answer,
-  });
+  return engineRunToCompletion({ gameDir, scenario, client, config });
 }
 
 /* ---------- inspectGame ---------------------------------------------- */
@@ -196,15 +166,14 @@ export interface InspectOptions {
 export interface GameView {
   config: GameConfigFile;
   tree: GameTree;
-  pending: PendingQuestion | null;
   /** When opts.turn is provided, the turn-specific subtree. */
   turnFocus?: {
     turn: number;
     actions: GameTree["turns"][number]["actions"];
+    playerRationales: GameTree["turns"][number]["playerRationales"];
     candidates: GameTree["turns"][number]["candidates"];
     selectedCandidateId: string;
     rngRoll: number;
-    escalation?: GameTree["turns"][number]["escalation"];
     briefings: Record<string, GameTree["briefings"][string]>;
   };
 }
@@ -215,7 +184,6 @@ export async function inspectGame(
 ): Promise<GameView> {
   const config = await readConfig(gameDir);
   const tree = await loadTree(gameDir);
-  const pending = await readPending(gameDir);
 
   let turnFocus: GameView["turnFocus"];
   if (opts.turn !== undefined) {
@@ -231,27 +199,38 @@ export async function inspectGame(
     turnFocus = {
       turn: t.turn,
       actions: t.actions,
+      playerRationales: t.playerRationales,
       candidates: t.candidates,
       selectedCandidateId: t.selectedCandidateId,
       rngRoll: t.rngRoll,
-      ...(t.escalation ? { escalation: t.escalation } : {}),
       briefings,
     };
   }
 
-  return { config, tree, pending, turnFocus };
+  return { config, tree, turnFocus };
 }
+
+/* ---------- forkGame / campaign re-exports --------------------------- */
+
+export { forkGame } from "./fork/index.js";
+export type {
+  ForkOptions,
+  ForkPerturbation,
+  ForkActionsOverride,
+  ForkPinCandidateOverride,
+} from "./fork/index.js";
+
+export { runCampaign, aggregateCampaign } from "./campaign/index.js";
+export type {
+  CampaignManifest,
+  CampaignArm,
+  CampaignReport,
+  CampaignArmReport,
+} from "./campaign/index.js";
 
 /* ---------- internals ------------------------------------------------- */
 
-function makeClient(config: GameConfigFile, opts: StepGameOptions): LlmClient {
-  const useMock = opts.useMock ?? config.useMock;
-  if (useMock) return createMockClient();
-  return createOpenAiClient({
-    apiKey: opts.openAiApiKey,
-    model: config.llmModel,
-  });
-}
+export { makeClient } from "./llm/factory.js";
 
 function defaultSeed(): number {
   return Math.floor(Math.random() * 0xffffffff);

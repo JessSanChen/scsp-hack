@@ -1,0 +1,68 @@
+{
+  "baseScenario": "taiwan-2026",
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30
+  ],
+  "arms": [
+    {
+      "id": "baseline",
+      "description": "Baseline initial conditions.",
+      "perturbations": []
+    },
+    {
+      "id": "plus-4-ssn",
+      "description": "USA fields four additional Pacific SSNs at game start.",
+      "perturbations": [
+        {
+          "kind": "force",
+          "faction": "USA",
+          "capability": "ssn-pacific",
+          "quantityDelta": 4
+        }
+      ]
+    },
+    {
+      "id": "minus-1-csg",
+      "description": "USA fields one fewer carrier strike group at game start.",
+      "perturbations": [
+        {
+          "kind": "force",
+          "faction": "USA",
+          "capability": "csg",
+          "quantityDelta": -1
+        }
+      ]
+    }
+  ],
+  "parallelism": 4,
+  "useMock": true
+}

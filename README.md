@@ -37,8 +37,7 @@ To use the real OpenAI backend, drop `--use-mock` and set `OPENAI_API_KEY`.
 - `src/llm/` - OpenAI client + deterministic mock.
 - `src/scenario/` - scenario loader and types.
 - `src/cli/` - thin CLI wrappers around the public API in `src/index.ts`.
-- `scenarios/taiwan-2026/` - bundled US/ROC/PRC scenario distilled from
-  [LLMWargaming/wargame/](LLMWargaming/wargame/).
+- `scenarios/taiwan-2026/` - bundled US/ROC/PRC scenario; see References below.
 - `games/<game-id>/` - per-game output (gitignored): `events.jsonl`,
   `state/turn-N.json`, `briefings/turn-N/<faction>.json`, optional
   `pending.json` when the engine is awaiting a human answer.
@@ -56,3 +55,13 @@ inspectGame(gameDir, { turn? })
 ```
 
 A future UI can call these directly without going through the CLI.
+
+## References
+
+The bundled `taiwan-2026` scenario is inspired by the wargame design and
+fictional U.S.-China crisis examined in:
+
+- Lamparth, M., et al. *Human vs. Machine: Behavioral Differences Between
+  Expert Humans and Language Models in Wargame Simulations.* arXiv:2403.03407
+  (2024). [PDF](https://arxiv.org/pdf/2403.03407) ·
+  [abs](https://arxiv.org/abs/2403.03407)

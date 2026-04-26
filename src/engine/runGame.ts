@@ -1,50 +1,43 @@
 /**
  * Per-turn engine. Sequences:
- *   1. Read scripted actions for the turn.
- *   2. Adjudicator generates candidate outcomes.
- *   3. Heuristics decide whether to escalate to a human.
- *      - If yes: persist `pending.json` + ESCALATION_REQUESTED and exit.
- *   4. Otherwise (or after `resumeTurnAfterAnswer`): sample, apply delta,
- *      generate per-faction briefings, write snapshot.
+ *   1. Fan out to per-faction player agents (parallel) to get this turn's
+ *      structured Action[] + rationale per faction.
+ *   2. Adjudicator generates candidate outcomes (with capability
+ *      citations, outcome-kind tags, escalationLevelDelta, optional
+ *      forcePatches).
+ *   3. Seeded weighted sample from the candidate set.
+ *   4. Apply delta, write state snapshot.
+ *   5. Briefer fans out per faction.
  *
- * The two entry points are `runOneTurn` (start a new turn) and
- * `resumeTurnAfterAnswer` (continue after a human supplies an answer).
+ * No human-in-the-loop. Three entry points are exposed:
+ *   - `runOneTurn` (advance one turn, single-step)
+ *   - `runGameToCompletion` (advance until GAME_COMPLETE)
+ *   - the autonomous loop respects `FORK_FROM` overrides (force-actions
+ *     or pin-candidate) for the immediate fork turn.
  */
 
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import {
   appendEvent,
-  clearPending,
+  findForkFrom,
   loadTree,
   readEvents,
-  readPending,
   writeBriefing,
-  writePending,
   writeStateSnapshot,
-  type GameTree,
-  type PendingQuestion,
 } from "./tree.js";
 import {
   applyDelta,
-  type EscalationRecord,
   type OutcomeCandidate,
   type WorldState,
 } from "./state.js";
 import { createRng, normaliseProbabilities, weightedSampleIndex } from "./rng.js";
 import { generateCandidates } from "../adjudicator/agent.js";
+import { decideFactionActions } from "../players/agent.js";
 import { generateBriefing } from "../comms/briefer.js";
-import {
-  buildEscalationQuestion,
-} from "../adjudicator/prompts.js";
-import {
-  shouldEscalate,
-  previousEscalationTurns,
-  type HeuristicsConfig,
-} from "../adjudicator/heuristics.js";
 import type { LlmClient } from "../llm/types.js";
 import type { Action, FactionId, Scenario } from "../scenario/types.js";
-import type { GameEvent } from "./events.js";
+import type { ForkOverride } from "./events.js";
 
 export interface GameConfigFile {
   scenarioId: string;
@@ -52,7 +45,6 @@ export interface GameConfigFile {
   seed: number;
   llmModel: string;
   useMock: boolean;
-  heuristics: HeuristicsConfig;
   createdAt: string;
 }
 
@@ -83,12 +75,6 @@ export type StepResult =
       summary: string;
     }
   | {
-      kind: "pending";
-      turn: number;
-      question: string;
-      reasons: string[];
-    }
-  | {
       kind: "complete";
       finalTurn: number;
     };
@@ -105,75 +91,128 @@ export async function runOneTurn(deps: RunOneTurnDeps): Promise<StepResult> {
   const events = await readEvents(gameDir);
   const tree = await loadTree(gameDir);
 
-  const pending = await readPending(gameDir);
-  if (pending) {
-    return {
-      kind: "pending",
-      turn: pending.turn,
-      question: pending.question,
-      reasons: pending.reasons,
-    };
+  if (tree.complete) {
+    return { kind: "complete", finalTurn: tree.currentState.turn };
   }
 
   const nextTurn = tree.currentState.turn + 1;
   if (nextTurn > scenario.turnCount) {
+    await appendEvent(gameDir, {
+      kind: "GAME_COMPLETE",
+      finalTurn: tree.currentState.turn,
+      reason: "turn-count-reached",
+    });
     return { kind: "complete", finalTurn: tree.currentState.turn };
   }
 
-  const scripted = scenario.scriptedTurns.find((t) => t.turn === nextTurn);
-  if (!scripted) {
-    throw new Error(
-      `Scenario '${scenario.id}' has no scripted actions for turn ${nextTurn}`,
-    );
-  }
+  const fork = findForkFrom(events);
+  const override =
+    fork?.overrides && fork.overrides.turn === nextTurn ? fork.overrides : undefined;
 
   await appendEvent(gameDir, { kind: "TURN_START", turn: nextTurn });
+
+  // Recent briefings (most recent 2 turns) per faction, for context.
+  const recentBriefingsByFaction: Record<FactionId, Array<{ turn: number; headline: string; bullets: string[] }>> = {};
+  for (const f of scenario.factions) recentBriefingsByFaction[f.id] = [];
+  for (const ev of events) {
+    if (ev.kind === "BRIEFING_DELIVERED") {
+      recentBriefingsByFaction[ev.faction]?.push({
+        turn: ev.turn,
+        headline: ev.briefing.headline,
+        bullets: ev.briefing.bullets,
+      });
+    }
+  }
+
+  // 1. Player agents fan out (or honour an override).
+  const actions: Record<FactionId, Action[]> = {};
+  const rationales: Record<FactionId, string> = {};
+
+  if (override?.kind === "force-actions" || override?.kind === "pin-candidate") {
+    for (const f of scenario.factions) {
+      const fromOverride = override.actions[f.id] ?? [];
+      const rat = override.rationales?.[f.id]
+        ?? `[override] supplied via fork at turn ${nextTurn}`;
+      actions[f.id] = fromOverride;
+      rationales[f.id] = rat;
+      await appendEvent(gameDir, {
+        kind: "PLAYER_DECISION",
+        turn: nextTurn,
+        faction: f.id,
+        actions: fromOverride,
+        rationale: rat,
+        source: "override",
+      });
+    }
+  } else {
+    const playerResults = await Promise.all(
+      scenario.factions.map((f) =>
+        decideFactionActions(client, {
+          scenario,
+          faction: f,
+          state: tree.currentState,
+          turn: nextTurn,
+          recentBriefings: recentBriefingsByFaction[f.id]?.slice(-4) ?? [],
+        }),
+      ),
+    );
+    for (const r of playerResults) {
+      actions[r.faction] = r.actions;
+      rationales[r.faction] = r.rationale;
+      await appendEvent(gameDir, {
+        kind: "LLM_TRACE",
+        turn: nextTurn,
+        call: `player:${r.faction}`,
+        request: r.trace.request,
+        response: r.trace.response,
+        mock: r.trace.mock,
+      });
+      await appendEvent(gameDir, {
+        kind: "PLAYER_DECISION",
+        turn: nextTurn,
+        faction: r.faction,
+        actions: r.actions,
+        rationale: r.rationale,
+        source: "auto",
+      });
+    }
+  }
+
   await appendEvent(gameDir, {
     kind: "ACTIONS_SUBMITTED",
     turn: nextTurn,
-    actions: scripted.actions,
+    actions,
   });
 
-  const { candidates, trace } = await generateCandidates(
-    client,
-    {
+  // 2. Adjudicator candidates (or copied from override).
+  let candidates: OutcomeCandidate[];
+  if (override?.kind === "pin-candidate") {
+    candidates = override.candidates;
+    await appendEvent(gameDir, {
+      kind: "CANDIDATES_GENERATED",
+      turn: nextTurn,
+      candidates,
+    });
+  } else {
+    const result = await generateCandidates(client, {
       scenario,
       state: tree.currentState,
       turn: nextTurn,
-      actions: scripted.actions,
-    },
-    "primary",
-  );
-
-  await appendEvent(gameDir, {
-    kind: "LLM_TRACE",
-    turn: nextTurn,
-    call: "candidate-gen",
-    request: trace.request,
-    response: trace.response,
-    mock: trace.mock,
-  });
-  await appendEvent(gameDir, {
-    kind: "CANDIDATES_GENERATED",
-    turn: nextTurn,
-    phase: "primary",
-    candidates,
-  });
-
-  const decision = shouldEscalate({
-    turn: nextTurn,
-    candidates,
-    config: config.heuristics,
-    prevEscalationTurns: previousEscalationTurns(events),
-  });
-
-  if (decision.escalate) {
-    return finalisePending({
-      gameDir,
+      actions,
+      playerRationales: rationales,
+    });
+    candidates = result.candidates;
+    await appendEvent(gameDir, {
+      kind: "LLM_TRACE",
       turn: nextTurn,
-      state: tree.currentState,
-      actions: scripted.actions,
-      reasons: decision.reasons,
+      call: "candidate-gen",
+      request: result.trace.request,
+      response: result.trace.response,
+      mock: result.trace.mock,
+    });
+    await appendEvent(gameDir, {
+      kind: "CANDIDATES_GENERATED",
+      turn: nextTurn,
       candidates,
     });
   }
@@ -185,159 +224,30 @@ export async function runOneTurn(deps: RunOneTurnDeps): Promise<StepResult> {
     config,
     state: tree.currentState,
     turn: nextTurn,
-    actions: scripted.actions,
+    actions,
     candidates,
-    escalation: undefined,
+    forcedCandidateId:
+      override?.kind === "pin-candidate" ? override.candidateId : undefined,
+    forcedCandidateSource:
+      override?.kind === "pin-candidate" ? "pinned" : "auto",
   });
 }
 
-/* ---------- Resume after a human answer ------------------------------ */
-
-export interface ResumeTurnDeps {
-  gameDir: string;
-  scenario: Scenario;
-  client: LlmClient;
-  config: GameConfigFile;
-  answer: { text?: string; chooseCandidateId?: string };
-}
-
-export async function resumeTurnAfterAnswer(
-  deps: ResumeTurnDeps,
-): Promise<StepResult> {
-  const { gameDir, scenario, client, config, answer } = deps;
-  const pending = await readPending(gameDir);
-  if (!pending) {
-    throw new Error(
-      "No pending escalation to resume. Use 'wargame step' to start a new turn.",
-    );
-  }
-  const turn = pending.turn;
-
-  const tree = await loadTree(gameDir);
-  // The state we're stepping FROM is the state after turn-1, i.e. before this turn ran.
-  const stateBefore = tree.currentState;
-  const scripted = scenario.scriptedTurns.find((t) => t.turn === turn);
-  if (!scripted) {
-    throw new Error(`Scenario has no scripted actions for turn ${turn}`);
-  }
-
-  let candidates: OutcomeCandidate[] = pending.candidates;
-  let humanChoseCandidateId: string | undefined;
-
-  if (answer.chooseCandidateId) {
-    const exists = candidates.find((c) => c.id === answer.chooseCandidateId);
-    if (!exists) {
-      throw new Error(
-        `Candidate id '${answer.chooseCandidateId}' not found in pending question`,
-      );
+export async function runGameToCompletion(deps: RunOneTurnDeps): Promise<{
+  finalTurn: number;
+  turnsRun: number;
+}> {
+  let turnsRun = 0;
+  for (;;) {
+    const r = await runOneTurn(deps);
+    if (r.kind === "complete") {
+      return { finalTurn: r.finalTurn, turnsRun };
     }
-    humanChoseCandidateId = answer.chooseCandidateId;
-  } else if (answer.text && answer.text.trim().length > 0) {
-    const { candidates: regenerated, trace } = await generateCandidates(
-      client,
-      {
-        scenario,
-        state: stateBefore,
-        turn,
-        actions: scripted.actions,
-        humanGuidance: answer.text,
-      },
-      "post-escalation",
-    );
-    candidates = regenerated;
-    await appendEvent(gameDir, {
-      kind: "LLM_TRACE",
-      turn,
-      call: "post-escalation",
-      request: trace.request,
-      response: trace.response,
-      mock: trace.mock,
-    });
-    await appendEvent(gameDir, {
-      kind: "CANDIDATES_GENERATED",
-      turn,
-      phase: "post-escalation",
-      candidates,
-    });
-  } else {
-    throw new Error(
-      "answerEscalation requires either { text: string } or { chooseCandidateId: string }",
-    );
+    turnsRun += 1;
   }
-
-  const escalation: EscalationRecord = {
-    reasons: pending.reasons,
-    question: pending.question,
-    askedAtTurn: turn,
-    askedAtIso: pending.iso,
-    humanResponseText: answer.text,
-    humanChoseCandidateId,
-    resolvedAtIso: new Date().toISOString(),
-  };
-
-  await appendEvent(gameDir, {
-    kind: "ESCALATION_RESOLVED",
-    turn,
-    record: escalation,
-  });
-  await clearPending(gameDir);
-
-  return finaliseTurn({
-    gameDir,
-    scenario,
-    client,
-    config,
-    state: stateBefore,
-    turn,
-    actions: scripted.actions,
-    candidates,
-    escalation,
-    forcedCandidateId: humanChoseCandidateId,
-  });
 }
 
 /* ---------- Shared finishers ----------------------------------------- */
-
-async function finalisePending(input: {
-  gameDir: string;
-  turn: number;
-  state: WorldState;
-  actions: Record<FactionId, Action[]>;
-  reasons: string[];
-  candidates: OutcomeCandidate[];
-}): Promise<StepResult> {
-  const { gameDir, turn, state, actions, reasons, candidates } = input;
-  const { question, stateSummary } = buildEscalationQuestion({
-    turn,
-    state,
-    actions,
-    reasons,
-    candidates: candidates.map((c) => ({
-      summary: `[${c.id}] ${c.summary}`,
-      probability: c.probability,
-      consequentiality: c.consequentiality,
-    })),
-  });
-
-  await appendEvent(gameDir, {
-    kind: "ESCALATION_REQUESTED",
-    turn,
-    reasons,
-    question,
-  });
-
-  const pending: PendingQuestion = {
-    turn,
-    reasons,
-    question,
-    candidates,
-    stateSummary,
-    iso: new Date().toISOString(),
-  };
-  await writePending(gameDir, pending);
-
-  return { kind: "pending", turn, question, reasons };
-}
 
 async function finaliseTurn(input: {
   gameDir: string;
@@ -348,8 +258,8 @@ async function finaliseTurn(input: {
   turn: number;
   actions: Record<FactionId, Action[]>;
   candidates: OutcomeCandidate[];
-  escalation?: EscalationRecord;
   forcedCandidateId?: string;
+  forcedCandidateSource: "auto" | "pinned";
 }): Promise<StepResult> {
   const {
     gameDir,
@@ -361,6 +271,7 @@ async function finaliseTurn(input: {
     actions,
     candidates,
     forcedCandidateId,
+    forcedCandidateSource,
   } = input;
 
   const normalised = normaliseProbabilities(candidates);
@@ -370,7 +281,9 @@ async function finaliseTurn(input: {
   if (forcedCandidateId) {
     selectedIdx = normalised.findIndex((c) => c.id === forcedCandidateId);
     if (selectedIdx < 0) {
-      throw new Error(`Forced candidate '${forcedCandidateId}' not found in normalised set`);
+      throw new Error(
+        `Pinned candidate '${forcedCandidateId}' not found in candidate set`,
+      );
     }
   } else {
     selectedIdx = weightedSampleIndex(normalised, roll);
@@ -383,6 +296,7 @@ async function finaliseTurn(input: {
     candidateId: selected.id,
     rngRoll: roll,
     appliedDelta: selected.stateDelta,
+    source: forcedCandidateSource,
   });
 
   const newState = applyDelta(state, selected.stateDelta, turn);
@@ -391,6 +305,7 @@ async function finaliseTurn(input: {
     kind: "STATE_SNAPSHOT",
     turn,
     state: newState,
+    origin: "regular",
   });
 
   for (const f of scenario.factions) {
@@ -420,6 +335,14 @@ async function finaliseTurn(input: {
     await writeBriefing(gameDir, turn, f.id, briefingResp.parsed);
   }
 
+  if (turn >= scenario.turnCount) {
+    await appendEvent(gameDir, {
+      kind: "GAME_COMPLETE",
+      finalTurn: turn,
+      reason: "turn-count-reached",
+    });
+  }
+
   return {
     kind: "advanced",
     turn,
@@ -427,3 +350,7 @@ async function finaliseTurn(input: {
     summary: selected.summary,
   };
 }
+
+/* ---------- Used by `wargame new` ------------------------------------ */
+
+export type { ForkOverride };

@@ -4,23 +4,25 @@
  * On disk, a game is an append-only JSONL event log + per-turn state
  * snapshots in a sibling directory. In memory, we reconstruct a
  * `GameTree`: an ordered list of `TurnNode`s carrying actions,
- * candidates, the selected branch, and any escalation. This is what a
- * future UI will read.
+ * candidates and the selected branch. This is what a future UI will
+ * read.
+ *
+ * No human-in-the-loop: all turns resolve autonomously. Forks store a
+ * `FORK_FROM` event recording lineage and any overrides.
  */
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Action, FactionId } from "../scenario/types.js";
 import type {
-  EscalationRecord,
   OutcomeCandidate,
   TurnNode,
   WorldState,
 } from "./state.js";
 import type {
   BriefingDeliveredEvent,
+  ForkFromEvent,
   GameEvent,
-  HeuristicsSnapshot,
   LlmTraceEvent,
 } from "./events.js";
 
@@ -28,7 +30,6 @@ export interface GameTree {
   scenarioId: string;
   seed: number;
   llmModel: string;
-  heuristics: HeuristicsSnapshot;
   initialState: WorldState;
   /** Latest known state (may equal initialState if no turn has resolved). */
   currentState: WorldState;
@@ -36,9 +37,13 @@ export interface GameTree {
   turns: TurnNode[];
   /** Briefings keyed by `${turn}:${faction}`. */
   briefings: Record<string, BriefingDeliveredEvent["briefing"]>;
-  /** Open escalation, if any, that has not yet resolved. */
-  openEscalation?: { turn: number; reasons: string[]; question: string };
-  /** Total events appended so far. */
+  /** Set on forks; absent on root games. */
+  fork?: {
+    baseGameDir: string;
+    fromTurn: number;
+  };
+  /** Set when a GAME_COMPLETE event has been observed. */
+  complete: boolean;
   eventCount: number;
 }
 
@@ -140,28 +145,27 @@ export function reconstructTree(events: GameEvent[]): GameTree {
     scenarioId: started.scenarioId,
     seed: started.seed,
     llmModel: started.llmModel,
-    heuristics: started.heuristics,
     initialState: started.initialState,
     currentState: started.initialState,
     turns: [],
     briefings: {},
+    complete: false,
     eventCount: events.length,
   };
 
   type WIP = {
     turn: number;
     actions?: Record<FactionId, Action[]>;
+    playerRationales: Record<FactionId, string>;
     candidates?: OutcomeCandidate[];
     selectedCandidateId?: string;
     rngRoll?: number;
-    escalation?: EscalationRecord;
-    pendingEscalation?: { reasons: string[]; question: string };
   };
   const wipByTurn = new Map<number, WIP>();
   const ensure = (turn: number): WIP => {
     let w = wipByTurn.get(turn);
     if (!w) {
-      w = { turn };
+      w = { turn, playerRationales: {} };
       wipByTurn.set(turn, w);
     }
     return w;
@@ -169,35 +173,23 @@ export function reconstructTree(events: GameEvent[]): GameTree {
 
   for (const e of events) {
     switch (e.kind) {
+      case "FORK_FROM":
+        tree.fork = { baseGameDir: e.baseGameDir, fromTurn: e.fromTurn };
+        break;
       case "TURN_START":
         ensure(e.turn);
         break;
+      case "PLAYER_DECISION": {
+        const w = ensure(e.turn);
+        w.playerRationales[e.faction] = e.rationale;
+        break;
+      }
       case "ACTIONS_SUBMITTED":
         ensure(e.turn).actions = e.actions;
         break;
       case "CANDIDATES_GENERATED":
         ensure(e.turn).candidates = e.candidates;
         break;
-      case "ESCALATION_REQUESTED":
-        ensure(e.turn).pendingEscalation = {
-          reasons: e.reasons,
-          question: e.question,
-        };
-        tree.openEscalation = {
-          turn: e.turn,
-          reasons: e.reasons,
-          question: e.question,
-        };
-        break;
-      case "ESCALATION_RESOLVED": {
-        const w = ensure(e.turn);
-        w.escalation = e.record;
-        delete w.pendingEscalation;
-        if (tree.openEscalation && tree.openEscalation.turn === e.turn) {
-          tree.openEscalation = undefined;
-        }
-        break;
-      }
       case "OUTCOME_SELECTED": {
         const w = ensure(e.turn);
         w.selectedCandidateId = e.candidateId;
@@ -209,6 +201,9 @@ export function reconstructTree(events: GameEvent[]): GameTree {
         break;
       case "BRIEFING_DELIVERED":
         tree.briefings[`${e.turn}:${e.faction}`] = e.briefing;
+        break;
+      case "GAME_COMPLETE":
+        tree.complete = true;
         break;
       case "LLM_TRACE":
       case "GAME_STARTED":
@@ -228,10 +223,10 @@ export function reconstructTree(events: GameEvent[]): GameTree {
       tree.turns.push({
         turn: w.turn,
         actions: w.actions,
+        playerRationales: w.playerRationales,
         candidates: w.candidates,
         selectedCandidateId: w.selectedCandidateId,
         rngRoll: w.rngRoll,
-        escalation: w.escalation,
       });
     }
   }
@@ -241,6 +236,11 @@ export function reconstructTree(events: GameEvent[]): GameTree {
 export async function loadTree(gameDir: string): Promise<GameTree> {
   const events = await readEvents(gameDir);
   return reconstructTree(events);
+}
+
+/** Locate the FORK_FROM event in a forked game's event log, if any. */
+export function findForkFrom(events: GameEvent[]): ForkFromEvent | undefined {
+  return events.find((e): e is ForkFromEvent => e.kind === "FORK_FROM");
 }
 
 /* ---------- Query helpers (the surface the UI will use) --------------- */
@@ -271,12 +271,6 @@ export function getCounterfactuals(
   return t.candidates.filter((c) => c.id !== t.selectedCandidateId);
 }
 
-export function getEscalations(tree: GameTree): Array<{ turn: number; record: EscalationRecord }> {
-  return tree.turns
-    .filter((t) => t.escalation)
-    .map((t) => ({ turn: t.turn, record: t.escalation! }));
-}
-
 export function getBriefing(
   tree: GameTree,
   turn: number,
@@ -287,47 +281,4 @@ export function getBriefing(
 
 export function getLlmTraces(events: GameEvent[]): LlmTraceEvent[] {
   return events.filter((e): e is LlmTraceEvent => e.kind === "LLM_TRACE");
-}
-
-/* ---------- Pending-question I/O (persisted async escalation) --------- */
-
-export interface PendingQuestion {
-  turn: number;
-  reasons: string[];
-  question: string;
-  /** The candidate set at the moment of escalation, for reference. */
-  candidates: OutcomeCandidate[];
-  /** Concise state summary for the human. */
-  stateSummary: string;
-  iso: string;
-}
-
-export async function writePending(
-  gameDir: string,
-  pending: PendingQuestion,
-): Promise<void> {
-  await fs.mkdir(gameDir, { recursive: true });
-  await fs.writeFile(
-    path.join(gameDir, "pending.json"),
-    JSON.stringify(pending, null, 2),
-    "utf8",
-  );
-}
-
-export async function readPending(gameDir: string): Promise<PendingQuestion | null> {
-  try {
-    const raw = await fs.readFile(path.join(gameDir, "pending.json"), "utf8");
-    return JSON.parse(raw) as PendingQuestion;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-}
-
-export async function clearPending(gameDir: string): Promise<void> {
-  try {
-    await fs.unlink(path.join(gameDir, "pending.json"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
 }

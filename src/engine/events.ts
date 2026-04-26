@@ -1,12 +1,17 @@
 /**
  * Event log schema. Every change to the world goes through one of these
  * events, appended to `events.jsonl`. Together they form the queryable
- * tree (single-path) of decisions.
+ * tree (single-path) of decisions in a game.
+ *
+ * The autonomous-agent build emits `PLAYER_DECISION` events recording
+ * each LLM-driven faction's structured action set + rationale, and adds
+ * `FORK_FROM` and `GAME_COMPLETE` for counterfactual / Monte Carlo
+ * orchestration.
  */
 
-import type { Action, FactionId } from "../scenario/types.js";
+import type { Action, FactionId, ForcePosture } from "../scenario/types.js";
 import type {
-  EscalationRecord,
+  ForcePatch,
   OutcomeCandidate,
   StateDelta,
   WorldState,
@@ -14,15 +19,16 @@ import type {
 
 export type EventKind =
   | "GAME_STARTED"
+  | "FORK_FROM"
   | "TURN_START"
+  | "PLAYER_DECISION"
   | "ACTIONS_SUBMITTED"
   | "CANDIDATES_GENERATED"
-  | "ESCALATION_REQUESTED"
-  | "ESCALATION_RESOLVED"
   | "OUTCOME_SELECTED"
   | "STATE_SNAPSHOT"
   | "BRIEFING_DELIVERED"
-  | "LLM_TRACE";
+  | "LLM_TRACE"
+  | "GAME_COMPLETE";
 
 export interface BaseEvent {
   /** Monotonic event sequence within a game. Assigned at append time. */
@@ -35,14 +41,58 @@ export interface GameStartedEvent extends BaseEvent {
   kind: "GAME_STARTED";
   scenarioId: string;
   seed: number;
-  heuristics: HeuristicsSnapshot;
   llmModel: string;
   initialState: WorldState;
 }
 
+/**
+ * Recorded as the second event in a forked game. Captures the
+ * counterfactual lineage: where it forked from and what was overridden.
+ */
+export interface ForkFromEvent extends BaseEvent {
+  kind: "FORK_FROM";
+  baseGameDir: string;
+  fromTurn: number;
+  /** Force-structure perturbations applied to the copied state snapshot. */
+  perturbations: ForcePatch[];
+  /**
+   * Optional override for the immediate next turn. Two mutually-exclusive
+   * shapes (the engine validates):
+   *   - `factionActions`: skip player agents at turn `fromTurn`, use these instead.
+   *   - `pinCandidate`: use the supplied candidate set and force-select an id.
+   */
+  overrides?: ForkOverride;
+}
+
+export type ForkOverride =
+  | {
+      kind: "force-actions";
+      turn: number;
+      actions: Record<FactionId, Action[]>;
+      rationales?: Record<FactionId, string>;
+    }
+  | {
+      kind: "pin-candidate";
+      turn: number;
+      candidateId: string;
+      candidates: OutcomeCandidate[];
+      actions: Record<FactionId, Action[]>;
+      rationales?: Record<FactionId, string>;
+    };
+
 export interface TurnStartEvent extends BaseEvent {
   kind: "TURN_START";
   turn: number;
+}
+
+export interface PlayerDecisionEvent extends BaseEvent {
+  kind: "PLAYER_DECISION";
+  turn: number;
+  faction: FactionId;
+  actions: Action[];
+  rationale: string;
+  /** "auto" = LLM player agent; "override" = supplied via fork. */
+  source: "auto" | "override";
 }
 
 export interface ActionsSubmittedEvent extends BaseEvent {
@@ -54,22 +104,7 @@ export interface ActionsSubmittedEvent extends BaseEvent {
 export interface CandidatesGeneratedEvent extends BaseEvent {
   kind: "CANDIDATES_GENERATED";
   turn: number;
-  /** "primary" for the first generation, "post-escalation" for the second. */
-  phase: "primary" | "post-escalation";
   candidates: OutcomeCandidate[];
-}
-
-export interface EscalationRequestedEvent extends BaseEvent {
-  kind: "ESCALATION_REQUESTED";
-  turn: number;
-  reasons: string[];
-  question: string;
-}
-
-export interface EscalationResolvedEvent extends BaseEvent {
-  kind: "ESCALATION_RESOLVED";
-  turn: number;
-  record: EscalationRecord;
 }
 
 export interface OutcomeSelectedEvent extends BaseEvent {
@@ -78,12 +113,16 @@ export interface OutcomeSelectedEvent extends BaseEvent {
   candidateId: string;
   rngRoll: number;
   appliedDelta: StateDelta;
+  /** "auto" = weighted sample; "pinned" = forced via fork override. */
+  source: "auto" | "pinned";
 }
 
 export interface StateSnapshotEvent extends BaseEvent {
   kind: "STATE_SNAPSHOT";
   turn: number;
   state: WorldState;
+  /** "regular" = end-of-turn snapshot; "fork-perturbed" = snapshot rewritten by FORK_FROM. */
+  origin?: "regular" | "fork-perturbed";
 }
 
 export interface BriefingDeliveredEvent extends BaseEvent {
@@ -100,36 +139,31 @@ export interface BriefingDeliveredEvent extends BaseEvent {
 export interface LlmTraceEvent extends BaseEvent {
   kind: "LLM_TRACE";
   turn: number;
-  /** Logical name of the call site, e.g. "candidate-gen", "post-escalation", "briefer:USA". */
+  /** Logical call site, e.g. "candidate-gen", "player:USA", "briefer:ROC". */
   call: string;
   request: unknown;
   response: unknown;
-  /** Whether this came from the mock LLM. */
   mock: boolean;
+}
+
+export interface GameCompleteEvent extends BaseEvent {
+  kind: "GAME_COMPLETE";
+  finalTurn: number;
+  reason: "turn-count-reached" | "manual-stop";
 }
 
 export type GameEvent =
   | GameStartedEvent
+  | ForkFromEvent
   | TurnStartEvent
+  | PlayerDecisionEvent
   | ActionsSubmittedEvent
   | CandidatesGeneratedEvent
-  | EscalationRequestedEvent
-  | EscalationResolvedEvent
   | OutcomeSelectedEvent
   | StateSnapshotEvent
   | BriefingDeliveredEvent
-  | LlmTraceEvent;
+  | LlmTraceEvent
+  | GameCompleteEvent;
 
-/**
- * Heuristic config persisted alongside the game so reproducible runs use
- * the same thresholds. Imported here (and re-declared) to avoid a circular
- * dep with `adjudicator/heuristics.ts`.
- */
-export interface HeuristicsSnapshot {
-  consequentialityThreshold: number;
-  minTopProbability: number;
-  confidenceFloor: number;
-  maxTurnsBetweenAsks: number;
-  askOnExternalActorMention: boolean;
-  alwaysAskOnTurns: number[];
-}
+/** Re-export used by ForkFromEvent for ergonomics in callers. */
+export type { ForcePatch, ForcePosture };

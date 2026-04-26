@@ -5,45 +5,53 @@
  *  1. The LLM never mutates state directly. It proposes a typed
  *     `StateDelta` which `applyDelta` translates into mutations.
  *  2. Knowledge is visibility-scoped. `commonKnowledge` is broadcast to
- *     every faction; `secretKnowledge[factionId]` is only ever shown to
+ *     every faction; `secretKnowledge[factionId]` is only visible to
  *     that faction (and the adjudicator).
+ *
+ * Force structure (`forces`) is first-class state per faction: capability
+ * slots with quantity / posture / readiness. Outcomes can attrite or
+ * reposture forces via `ForcePatch`es, and the global `escalationLevel`
+ * is the headline outcome metric Monte Carlo campaigns aggregate over.
  */
 
-import type { Action, FactionId, RegionId, Scenario } from "../scenario/types.js";
+import type {
+  Action,
+  CapabilityId,
+  FactionId,
+  ForceLevel,
+  ForcePosture,
+  RegionId,
+  Scenario,
+} from "../scenario/types.js";
 
-export type ConfidenceLevel = "low" | "medium" | "high";
+export type { Action, CapabilityId, FactionId, ForceLevel, ForcePosture, RegionId };
 
 export interface FactionState {
   id: FactionId;
   /** 0-100 readiness/morale-style aggregate. Tunable by deltas. */
   politicalWill: number;
-  /** 0-100 force readiness. Tunable by deltas. */
+  /** 0-100 force readiness aggregate (separate from per-capability readiness). */
   forceReadiness: number;
-  /** Cumulative casualties across the game. */
   casualties: number;
   /** Free-form posture summary the adjudicator updates. */
   posture: string;
-  /** Status modifiers: e.g. "alert-level-2", "domestic-pressure". */
   statusFlags: string[];
+  /** Order of battle: capability slot -> level. */
+  forces: Record<CapabilityId, ForceLevel>;
 }
 
 export interface RegionState {
   id: RegionId;
-  /** Which factions currently have forces here. */
   presentFactions: FactionId[];
-  /** Which faction nominally controls the region right now. */
   controllingFaction?: FactionId;
-  /** Tension level 0-10. Tunable by deltas. */
+  /** 0-10 region-specific tension. */
   tensionLevel: number;
-  /** Recent incident headlines, newest last. */
   recentIncidents: string[];
 }
 
 export interface TimelineEntry {
   turn: number;
-  /** Short headline-style description. */
   text: string;
-  /** Optional tag e.g. "incident", "diplomatic", "military". */
   tag?: string;
 }
 
@@ -51,13 +59,12 @@ export interface WorldState {
   scenarioId: string;
   /** The turn that just resolved. State at game start has turn = 0. */
   turn: number;
+  /** Headline outcome metric. 0 = baseline; 10 = open kinetic war. */
+  escalationLevel: number;
   factions: Record<FactionId, FactionState>;
   regions: Record<RegionId, RegionState>;
-  /** Events visible to every faction. */
   commonKnowledge: TimelineEntry[];
-  /** Events visible only to a specific faction (and the adjudicator). */
   secretKnowledge: Record<FactionId, TimelineEntry[]>;
-  /** Adjudicator-authored running narrative summary. */
   narrative: string[];
 }
 
@@ -82,15 +89,29 @@ export type RegionStatePatch = {
   addIncidents?: string[];
 };
 
+export interface ForcePatch {
+  factionId: FactionId;
+  capabilityId: CapabilityId;
+  /** Add (or subtract) units from the order of battle. */
+  quantityDelta?: number;
+  /** Reposture this capability slot. */
+  postureSet?: ForcePosture;
+  /** Adjust readiness 0..100 (clamped). */
+  readinessDelta?: number;
+}
+
 export type KnowledgeAddition =
   | { scope: "common"; entry: { text: string; tag?: string } }
   | { scope: "secret"; faction: FactionId; entry: { text: string; tag?: string } };
 
 export interface StateDelta {
-  /** Short summary of what happened, appended to the running narrative. */
+  /** 1-2 sentence summary appended to running narrative. */
   narrativeAppend: string;
+  /** Increment / decrement the global escalation level. */
+  escalationLevelDelta?: number;
   factionPatches?: FactionStatePatch[];
   regionPatches?: RegionStatePatch[];
+  forcePatches?: ForcePatch[];
   knowledgeAdditions?: KnowledgeAddition[];
 }
 
@@ -105,37 +126,30 @@ export interface OutcomeCandidate {
   /** 0..1; the engine renormalises if the LLM's set doesn't sum to 1. */
   probability: number;
   consequentiality: Consequentiality;
-  /** 0..1 LLM self-rated confidence in this branch's plausibility. */
   confidence: number;
   stateDelta: StateDelta;
   /** Per-faction visibility into the outcome itself. */
   visibility: Record<FactionId, "full" | "partial" | "none">;
+  /** Tags drawn from `Scenario.outcomeKinds`. */
+  outcomeKinds: string[];
+  /**
+   * Capability ids invoked or stressed by this outcome (mined for
+   * "which capabilities most often appear in branches that lead to X?").
+   */
+  capabilityCitations: string[];
   /** Free-form mention of an actor outside the modelled factions. */
   flagsExternalActor?: string;
-}
-
-export interface EscalationRecord {
-  /** Why the engine asked the human. */
-  reasons: string[];
-  /** The question text presented to the human. */
-  question: string;
-  askedAtTurn: number;
-  askedAtIso: string;
-  /** Set when the human responds. */
-  humanResponseText?: string;
-  /** If the human chose a specific candidate id, recorded here. */
-  humanChoseCandidateId?: string;
-  resolvedAtIso?: string;
 }
 
 export interface TurnNode {
   turn: number;
   actions: Record<FactionId, Action[]>;
+  /** Per-faction rationale recorded by the player agent. */
+  playerRationales: Record<FactionId, string>;
   candidates: OutcomeCandidate[];
   selectedCandidateId: string;
   /** The 0..1 roll used to weighted-sample the candidate. */
   rngRoll: number;
-  escalation?: EscalationRecord;
 }
 
 /* ---------- Construction & application -------------------------------- */
@@ -143,6 +157,7 @@ export interface TurnNode {
 export function initialWorldState(scenario: Scenario): WorldState {
   const factions: Record<FactionId, FactionState> = {};
   for (const f of scenario.factions) {
+    const forces = scenario.initialForces[f.id] ?? {};
     factions[f.id] = {
       id: f.id,
       politicalWill: 75,
@@ -150,6 +165,7 @@ export function initialWorldState(scenario: Scenario): WorldState {
       casualties: 0,
       posture: f.initialPosture,
       statusFlags: [],
+      forces: cloneForces(forces),
     };
   }
   const regions: Record<RegionId, RegionState> = {};
@@ -169,6 +185,7 @@ export function initialWorldState(scenario: Scenario): WorldState {
   return {
     scenarioId: scenario.id,
     turn: 0,
+    escalationLevel: 0,
     factions,
     regions,
     commonKnowledge: scenario.initialTimeline.map((text) => ({
@@ -193,6 +210,11 @@ export function applyDelta(
   const next: WorldState = {
     scenarioId: state.scenarioId,
     turn: nextTurn,
+    escalationLevel: clamp(
+      state.escalationLevel + (delta.escalationLevelDelta ?? 0),
+      0,
+      10,
+    ),
     factions: cloneFactions(state.factions),
     regions: cloneRegions(state.regions),
     commonKnowledge: [...state.commonKnowledge],
@@ -252,6 +274,22 @@ export function applyDelta(
     }
   }
 
+  for (const fp of delta.forcePatches ?? []) {
+    const f = next.factions[fp.factionId];
+    if (!f) continue;
+    const slot = f.forces[fp.capabilityId];
+    if (!slot) continue;
+    if (fp.quantityDelta !== undefined) {
+      slot.quantity = Math.max(0, slot.quantity + fp.quantityDelta);
+    }
+    if (fp.postureSet !== undefined) {
+      slot.posture = fp.postureSet;
+    }
+    if (fp.readinessDelta !== undefined) {
+      slot.readiness = clamp(slot.readiness + fp.readinessDelta, 0, 100);
+    }
+  }
+
   for (const ka of delta.knowledgeAdditions ?? []) {
     const entry: TimelineEntry = {
       turn: nextTurn,
@@ -271,29 +309,64 @@ export function applyDelta(
 }
 
 /**
- * Build a per-faction view of state with knowledge filtered by visibility.
- * Used both for prompting the briefer agent and for any future UI that
- * needs to render what a single player sees.
+ * Apply a list of `ForcePatch`es directly to a state without touching
+ * other fields. Used by the fork module to apply pre-game perturbations
+ * (e.g. -1 CSG) to a copied state snapshot.
+ */
+export function applyForcePatches(state: WorldState, patches: ForcePatch[]): WorldState {
+  const next: WorldState = {
+    ...state,
+    factions: cloneFactions(state.factions),
+  };
+  for (const fp of patches) {
+    const f = next.factions[fp.factionId];
+    if (!f) continue;
+    const slot = f.forces[fp.capabilityId];
+    if (!slot) continue;
+    if (fp.quantityDelta !== undefined) {
+      slot.quantity = Math.max(0, slot.quantity + fp.quantityDelta);
+    }
+    if (fp.postureSet !== undefined) {
+      slot.posture = fp.postureSet;
+    }
+    if (fp.readinessDelta !== undefined) {
+      slot.readiness = clamp(slot.readiness + fp.readinessDelta, 0, 100);
+    }
+  }
+  return next;
+}
+
+/**
+ * Build a per-faction view of state with knowledge and forces filtered
+ * by visibility. The faction sees its own forces fully, and only its
+ * own secret knowledge timeline.
  */
 export function viewForFaction(state: WorldState, faction: FactionId): {
   state: WorldState;
-  visibleNarrativeNote: string;
 } {
   const view: WorldState = {
     ...state,
     secretKnowledge: { [faction]: [...(state.secretKnowledge[faction] ?? [])] },
   };
-  return {
-    state: view,
-    visibleNarrativeNote:
-      "Narrative summary is the adjudicator's full view; only timeline entries below are visible to this faction.",
-  };
+  return { state: view };
 }
 
 function cloneFactions(src: Record<FactionId, FactionState>): Record<FactionId, FactionState> {
   const out: Record<FactionId, FactionState> = {};
   for (const [k, v] of Object.entries(src)) {
-    out[k] = { ...v, statusFlags: [...v.statusFlags] };
+    out[k] = {
+      ...v,
+      statusFlags: [...v.statusFlags],
+      forces: cloneForces(v.forces),
+    };
+  }
+  return out;
+}
+
+function cloneForces(src: Record<CapabilityId, ForceLevel>): Record<CapabilityId, ForceLevel> {
+  const out: Record<CapabilityId, ForceLevel> = {};
+  for (const [k, v] of Object.entries(src)) {
+    out[k] = { ...v };
   }
   return out;
 }

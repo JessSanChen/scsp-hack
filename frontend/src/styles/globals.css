@@ -155,3 +155,27 @@ body {
 .conseq-1, .conseq-2 { background: rgba(34,197,94,0.15);  color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
 .conseq-3            { background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
 .conseq-4, .conseq-5 { background: rgba(239,68,68,0.15);  color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+
+/* ── Leaflet custom tooltips ──────────────────────── */
+.leaflet-tooltip.tactical-tooltip,
+.leaflet-tooltip.infra-tooltip,
+.leaflet-tooltip.flight-tooltip {
+  background: rgba(6,11,20,0.92);
+  border: 1px solid rgba(56,189,248,0.25);
+  border-radius: 3px;
+  color: #e2e8f0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 5px 8px;
+  box-shadow: none;
+}
+.leaflet-tooltip.tactical-tooltip::before,
+.leaflet-tooltip.infra-tooltip::before,
+.leaflet-tooltip.flight-tooltip::before {
+  border-top-color: rgba(56,189,248,0.25);
+}
+
+/* Suppress Leaflet's default tile loading background */
+.leaflet-container {
+  background: #060b14 !important;
+}
